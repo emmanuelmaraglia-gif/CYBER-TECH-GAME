@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#140032">
+  <title>CYBER TECH GAME</title>
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- Campo de nome de usuário (só aparece na tela de login) -->
+  <input id="nameInput" type="text" maxlength="20" autocomplete="off" autocapitalize="off" spellcheck="false"
+         placeholder="SEU NOME" aria-label="Nome de usuário">
+
+  <div id="touchControls" aria-label="Controles do jogo">
+    <div class="pad-col">
+      <button type="button" class="ctrl-btn" data-key="w" aria-label="Cima">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 22 20H2z"></path></svg>
+      </button>
+      <button type="button" class="ctrl-btn" data-key="s" aria-label="Baixo">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20 2 4h20z"></path></svg>
+      </button>
+    </div>
+
+    <div class="pad-row">
+      <button type="button" class="ctrl-btn" data-key="a" aria-label="Esquerda">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12 20 2v20z"></path></svg>
+      </button>
+      <button type="button" class="ctrl-btn" data-key="d" aria-label="Direita">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12 4 2v20z"></path></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Firebase (SDK compat) — precisa vir antes do main.js -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+  <script src="assets/js/main.js"></script>
+</body>
+</html>
