@@ -8,12 +8,9 @@
 // Enquanto estiver "COLE_AQUI", o jogo roda em MODO DE TESTE (dados só neste aparelho, com jogadores de exemplo).
 // ============================================================
 const FIREBASE_CONFIG = {
-  apiKey: "COLE_AQUI",
-  authDomain: "SEU-PROJETO.firebaseapp.com",
-  projectId: "SEU-PROJETO",
-  storageBucket: "SEU-PROJETO.appspot.com",
-  messagingSenderId: "000000000000",
-  appId: "1:000000000000:web:0000000000000000"
+  apiKey: "AIzaSyBuxxFYEWfOZK6TVY2j0OPLFQnU2V-LPdU",
+  authDomain: "cyber-tech-game.firebaseapp.com",
+  projectId: "cyber-tech-game"
 };
 
 // ################################################################
@@ -39,56 +36,88 @@ const DB = (() => {
     .slice(0, 10)
     .map(p => ({ name: p.name, value: p[field] }));
 
-  // ---------------- FIREBASE ----------------
+  // ---------------- FIREBASE (Firestore sem Authentication/Cloud Functions) ----------------
   if (useFirebase) {
-    firebase.initializeApp(FIREBASE_CONFIG);
-    const fs = firebase.firestore(), auth = firebase.auth();
-    let uid = null;
-    const ready = auth.signInAnonymously().then(c => { uid = c.user.uid; });
+    if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+    const fs = firebase.firestore();
+    const ready = Promise.resolve();
     const players = () => fs.collection("players");
     const metaRef = fs.collection("meta").doc("leaderboard");
 
-    // Recalcula os 3 Top 10 e grava o "retrato" do placar (só roda se tiver passado 24h)
-    const rebuild = async () => {
-      const q = (field, dir) => players().where(field, ">", 0).orderBy(field, dir).limit(10).get()
-        .then(s => s.docs.map(d => ({ name: d.data().name, value: d.data()[field] })));
-      const [easy, hard, boss] = await Promise.all([q("easyBest", "desc"), q("hardBest", "desc"), q("bossBestMs", "asc")]);
-      await metaRef.set({ easy, hard, boss, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    const readTop = async (field, dir) => {
+      const snap = await players().where(field, ">", 0).orderBy(field, dir).limit(10).get();
+      return snap.docs.map(d => ({ name: d.data().name, value: d.data()[field] }));
+    };
+
+    // Cria a fotografia apenas depois de uma pontuação válida. updatedAt marca o início
+    // do ciclo atual; após 24h, a primeira visita/processo do jogo recalcula e reinicia o ciclo.
+    const rebuildIfDue = async (forceFirst = false) => {
+      const snap = await metaRef.get();
+      const updatedAt = snap.exists && snap.data().updatedAt ? snap.data().updatedAt.toMillis() : 0;
+      if (snap.exists && Date.now() - updatedAt < DAY) return snap;
+      if (!snap.exists && !forceFirst) return snap;
+
+      const [easy, hard, boss] = await Promise.all([
+        readTop("easyBest", "desc"), readTop("hardBest", "desc"), readTop("bossBestMs", "asc")
+      ]);
+      const data = { easy, hard, boss, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+      try {
+        await metaRef.set(data);
+      } catch (e) {
+        // Outro jogador pode ter criado/atualizado o documento entre a leitura e a escrita.
+        const latest = await metaRef.get();
+        if (!latest.exists) throw e;
+        const latestAt = latest.data().updatedAt ? latest.data().updatedAt.toMillis() : 0;
+        if (Date.now() - latestAt >= DAY) throw e;
+      }
+      return metaRef.get();
     };
 
     return {
       mode: "firebase", keyOf, ready,
 
       async isNameTaken(name) {
-        await ready;
         const d = await players().doc(keyOf(name)).get();
-        return d.exists && d.data().uid !== uid;       // se for do mesmo aparelho, deixa entrar de novo
+        return d.exists && d.data().name !== name;
       },
 
-      // O ID do documento é o nome normalizado: duas pessoas nunca conseguem o mesmo nome
+      // Nome normalizado como ID: o mesmo nome não pode ser cadastrado duas vezes.
       async claimName(name) {
-        await ready;
         const ref = players().doc(keyOf(name));
         return fs.runTransaction(async t => {
           const d = await t.get(ref);
-          if (d.exists) return d.data().uid === uid ? { ok: true, record: pick(d.data()) } : { ok: false, reason: "taken" };
-          t.set(ref, { uid, name, createdAt: firebase.firestore.FieldValue.serverTimestamp(), easyBest: 0, hardBest: 0 });
+          if (d.exists) {
+            return keyOf(d.data().name) === keyOf(name)
+              ? { ok: true, record: pick(d.data()) }
+              : { ok: false, reason: "taken" };
+          }
+          t.set(ref, { name, createdAt: firebase.firestore.FieldValue.serverTimestamp(), easyBest: 0, hardBest: 0, bossBestMs: 0 });
           return { ok: true, record: pick({}) };
         });
       },
 
       async submit(me, field, value) {
-        await ready;
-        await players().doc(keyOf(me.name)).update({ [field]: value });
+        if (!["easyBest", "hardBest", "bossBestMs"].includes(field) || !(value > 0)) return;
+        const ref = players().doc(keyOf(me.name));
+        await fs.runTransaction(async t => {
+          const d = await t.get(ref);
+          if (!d.exists) throw new Error("Jogador não encontrado no Hall da Fama.");
+          const old = d.data()[field] || 0;
+          const better = field === "bossBestMs" ? (!old || value < old) : value > old;
+          if (better) t.update(ref, { [field]: value });
+        });
+        // A primeira pontuação válida inicia o ciclo; depois, o ranking só é refeito
+        // quando completadas 24h. O ciclo seguinte começa imediatamente na atualização.
+        await rebuildIfDue(true);
       },
 
       async getLeaderboards() {
-        await ready;
         let snap = await metaRef.get();
-        const age = s => (s.exists && s.data().updatedAt) ? Date.now() - s.data().updatedAt.toMillis() : Infinity;
-        if (age(snap) >= DAY) {
-          try { await rebuild(); } catch (e) { if (!snap.exists) throw e; }   // outro jogador pode ter atualizado antes
-          snap = await metaRef.get();
+        if (snap.exists && snap.data().updatedAt && Date.now() - snap.data().updatedAt.toMillis() >= DAY) {
+          try { snap = await rebuildIfDue(false); } catch (e) { snap = await metaRef.get(); }
+        }
+        if (!snap.exists) {
+          return { easy: [], hard: [], boss: [], updatedAt: Date.now() };
         }
         const d = snap.data();
         return { easy: d.easy || [], hard: d.hard || [], boss: d.boss || [], updatedAt: d.updatedAt ? d.updatedAt.toMillis() : Date.now() };
