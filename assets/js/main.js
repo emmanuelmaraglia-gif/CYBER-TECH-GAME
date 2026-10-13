@@ -740,6 +740,53 @@ function getButtons() {
   return [];
 }
 
+// Confirma antes de abandonar uma partida em andamento.
+// No Clássico, informa os pontos acumulados que serão perdidos ao sair.
+// No modo BOSS, deixa claro que sair não concede recompensa nem recorde de conclusão.
+function confirmReturnToMenu() {
+  if (screen !== "playing" || gameOver) {
+    screen = "menu";
+    paused = false;
+    keys.clear(); running = false; stick = null;
+    return;
+  }
+
+  let message;
+  if (mode === "boss") {
+    message = "ATENÇÃO!\n\nSe você voltar ao menu agora, receberá NADA desta partida.\n\nTem certeza de que deseja voltar ao menu?";
+  } else {
+    message = "Você acumulou " + score + " ponto" + (score === 1 ? "" : "s") +
+      " nesta partida.\n\nSe voltar ao menu agora, esses pontos não serão contabilizados no Hall da Fama.\n\nDeseja mesmo voltar ao menu?";
+  }
+
+
+if (window.confirm(message)) {
+  // No modo Clássico, registra os pontos desta partida
+  // como recorde, sem somar com partidas anteriores.
+  if (mode === "easy" || mode === "hard") {
+    const field = mode === "easy" ? "easyBest" : "hardBest";
+
+    if (score > 0 && score > bestScore) {
+      bestScore = score;
+      saveBest();
+
+      if (DB && typeof DB.submit === "function") {
+        DB.submit({ name: playerName }, field, score)
+          .catch(err => console.error("Erro ao salvar recorde:", err));
+      }
+    }
+  }
+
+  screen = "menu";
+  paused = false;
+  gameOver = false;
+  keys.clear();
+  running = false;
+  stick = null;
+}
+
+}
+
 function press(id) {
   if (id === "play") screen = "modes";
   else if (id === "hall") openHall();
@@ -766,7 +813,7 @@ function press(id) {
   else if (id === "again") startGame();
   else if (id === "pause") pauseGame();
   else if (id === "resume") paused = false;
-  else if (id === "menu") { screen = "menu"; paused = false; }
+  else if (id === "menu") confirmReturnToMenu();
 }
 
 function pauseGame() {
