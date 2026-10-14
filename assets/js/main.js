@@ -202,7 +202,7 @@ const STAMINA_REGEN = 15;   // recuperação por segundo ao não correr
 const STAMINA_RESUME = 30;  // depois de zerar, só volta a correr ao recuperar isso
 
 // ESTADO
-let screen = "menu";        // "menu" | "difficulty" | "playing"
+let screen = "menu";        // telas do jogo
 let mode = "easy";          // "easy" | "hard"
 let player = { x: 0, y: 0, size: 40 };
 let item = { x: 0, y: 0, size: 20 };
@@ -213,6 +213,8 @@ let gameOver = false;
 let flash = 0, flashColor = "#fff";
 let last = 0, running = false, stick = null, audio = null;
 let paused = false;
+let controlMode = localStorage.getItem("ctg_control_mode") === "analog" ? "analog" : "arrows";
+let musicVolumePercent = Math.max(0, Math.min(100, Number(localStorage.getItem("ctg_music_volume") ?? 50)));
 let stamina = STAMINA_MAX, exhausted = false, staminaDelay = 0;
 let powerups = [], puTimer = 6, magnetTime = 0, shield = 0;
 let debuff = null, debuffTime = 0, nextDebuffAt = DEBUFF_EVERY, fake = null;
@@ -242,6 +244,8 @@ function overlap(a, b, m = 0) {
   return a.x < b.x + b.size + m && a.x + a.size > b.x - m &&
          a.y < b.y + b.size + m && a.y + a.size > b.y - m;
 }
+
+function pauseButtonZone() { return { x: W()/2 - 22, y: 8, size: 44, gap: 4, fixed: true }; }
 
 function safePosition(size, avoid, margin) {
   let pos;
@@ -330,7 +334,7 @@ function startGame() {
   }
 
   const hard = mode === "hard";
-  const p = safePosition(item.size, [player], 80);
+  const p = safePosition(item.size, [player, pauseButtonZone()], 80);
   item.x = p.x; item.y = p.y;
 
   const cfg = obstacleSettings();
@@ -635,12 +639,38 @@ function drawLogin() {
 
 // ----- MENU -----
 function menuLayout() {
-  const cy = H() / 2, bh = H() < 450 ? 50 : 62, gap = 10, total = 3 * bh + 2 * gap, top = cy - total / 2 + 24, x = W() / 2 - 120;
+  const cy = H() / 2, bh = H() < 450 ? 44 : 54, gap = 8, total = 4 * bh + 3 * gap, top = cy - total / 2 + 18, x = W() / 2 - 120;
   return { top, buttons: [
     { id: "play", label: "JOGAR", x, y: top, w: 240, h: bh },
-    { id: "hall", label: "HALL DA FAMA", font: 22, color: "#ffd700", x, y: top + bh + gap, w: 240, h: bh },
-    { id: "rewards", label: "RECOMPENSAS", font: 22, color: "#00ACFF", x, y: top + 2 * (bh + gap), w: 240, h: bh }
+    { id: "hall", label: "HALL DA FAMA", font: 21, color: "#ffd700", x, y: top + bh + gap, w: 240, h: bh },
+    { id: "settings", label: "CONFIGURAÇÕES", font: 20, color: "#00e5ff", x, y: top + 2 * (bh + gap), w: 240, h: bh },
+    { id: "rewards", label: "RECOMPENSAS", font: 20, color: "#00ACFF", x, y: top + 3 * (bh + gap), w: 240, h: bh }
   ] };
+}
+
+function settingsLayout() {
+  const cx = W() / 2, cy = H() / 2, bw = Math.min(190, (W() - 40) / 2), gap = 12;
+  const row1 = cy - 75, row2 = cy + 20;
+  return { buttons: [
+    { id: "settings_arrows", label: (controlMode === "arrows" ? "✓ " : "") + "SETINHAS", font: 18, color: controlMode === "arrows" ? "#4dff88" : "#00ACFF", x: cx - bw - gap/2, y: row1, w: bw, h: 54 },
+    { id: "settings_analog", label: (controlMode === "analog" ? "✓ " : "") + "ANALÓGICO", font: 18, color: controlMode === "analog" ? "#4dff88" : "#00ACFF", x: cx + gap/2, y: row1, w: bw, h: 54 },
+    { id: "vol_down", label: "−", font: 30, color: "#00ACFF", x: cx - 115, y: row2, w: 60, h: 50 },
+    { id: "vol_up", label: "+", font: 30, color: "#00ACFF", x: cx + 55, y: row2, w: 60, h: 50 },
+    { id: "back", label: "VOLTAR", font: 18, outline: true, x: cx - 80, y: cy + 115, w: 160, h: 42 }
+  ] };
+}
+
+function drawSettings() {
+  const cy = H() / 2;
+  drawTitle("CONFIGURAÇÕES", 34, Math.max(42, cy - 145), "#00e5ff");
+  ctx.textAlign = "center"; ctx.fillStyle = "white"; ctx.font = "bold 17px Arial";
+  ctx.fillText("Forma de movimentação", W()/2, cy - 91);
+  settingsLayout().buttons.forEach(drawButton);
+  ctx.fillStyle = "white"; ctx.font = "bold 18px Arial";
+  ctx.fillText("Volume da música: " + musicVolumePercent + "%", W()/2, cy + 5);
+  ctx.font = "13px Arial"; ctx.fillStyle = "rgba(255,255,255,.75)";
+  ctx.fillText("Ajuste de 5 em 5", W()/2, cy + 86);
+  ctx.textAlign = "left";
 }
 
 // ----- HALL DA FAMA -----
@@ -708,6 +738,7 @@ function getButtons() {
   const cx = W() / 2, cy = H() / 2;
   if (screen === "login") return loginLayout().buttons;
   if (screen === "hall") return hallLayout().buttons;
+  if (screen === "settings") return settingsLayout().buttons;
   if (screen === "rewards") return rewardsLayout().buttons;
   if (screen === "congrats") return congratsLayout().buttons;
   if (screen === "menu") return menuLayout().buttons;
@@ -793,6 +824,11 @@ if (window.confirm(message)) {
 function press(id) {
   if (id === "play") screen = "modes";
   else if (id === "hall") openHall();
+  else if (id === "settings") screen = "settings";
+  else if (id === "settings_arrows") { controlMode = "arrows"; localStorage.setItem("ctg_control_mode", controlMode); }
+  else if (id === "settings_analog") { controlMode = "analog"; localStorage.setItem("ctg_control_mode", controlMode); }
+  else if (id === "vol_down") setMusicVolume(musicVolumePercent - 5);
+  else if (id === "vol_up") setMusicVolume(musicVolumePercent + 5);
   else if (id.startsWith("tab")) hallTab = +id.slice(3);
   else if (id === "loginOk") loginClick();
   else if (id === "classic") screen = "difficulty";
@@ -864,7 +900,7 @@ touchControls.querySelectorAll(".ctrl-btn").forEach(btn => {
 function updateTouchControls() {
   const isCellphone = /Android.*Mobile|iPhone|iPod|Windows Phone|Mobile/i.test(navigator.userAgent) &&
                       matchMedia("(pointer: coarse)").matches;
-  const show = screen === "playing" && !gameOver && !paused && isCellphone;
+  const show = screen === "playing" && !gameOver && !paused && isCellphone && controlMode === "arrows";
   if (show === touchShown) return;
   touchShown = show;
   touchControls.classList.toggle("controls-on", show);
@@ -883,7 +919,7 @@ document.addEventListener("keydown", e => {
     if (paused && (k === "p" || k === "escape" || confirm)) { paused = false; e.preventDefault(); return; }
   }
 
-  if ((screen === "rewards" || screen === "modes" || screen === "difficulty" || screen === "hall") && k === "escape") { screen = "menu"; return; }
+  if ((screen === "rewards" || screen === "modes" || screen === "difficulty" || screen === "hall" || screen === "settings") && k === "escape") { screen = "menu"; return; }
   if (screen === "menu" && confirm) { screen = "modes"; e.preventDefault(); return; }
   if (screen === "modes" && (k === "1" || k === "2")) { press(k === "1" ? "classic" : "boss"); return; }
   if (screen === "difficulty" && (k === "1" || k === "2")) { press(k === "1" ? "easy" : "hard"); return; }
@@ -907,7 +943,14 @@ canvas.addEventListener("pointerdown", e => {
   const b = getButtons().find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
   if (b) { press(b.id); return; }
 
-  if (screen === "playing" && !gameOver && !paused && e.pointerType !== "mouse") {
+  if (screen === "playing" && !gameOver && !paused && e.pointerType !== "mouse" && controlMode === "analog") {
+    // O analógico fica fixo na parte inferior central da tela.
+    const ox = W() / 2, oy = H() - Math.max(82, H() * 0.14);
+    if (Math.hypot(x - ox, y - oy) > STICK_MAX * 2.2) return;
+    canvas.setPointerCapture(e.pointerId);
+    stick = { id: e.pointerId, ox, oy, x, y };
+  } else if (screen === "playing" && !gameOver && !paused && e.pointerType !== "mouse" && controlMode === "arrows") {
+    // Mantém o controle por arrasto disponível em dispositivos com ponteiro de toque.
     canvas.setPointerCapture(e.pointerId);
     stick = { id: e.pointerId, ox: x, oy: y, x, y };
   }
@@ -938,6 +981,7 @@ function powerupZones() { return powerups.map(proxyZone); }
 function freeAvoid(skip) {
   return [
     { x: player.x, y: player.y, size: player.size, gap: 20, fixed: true },
+    ...(screen === "playing" && mode !== "boss" ? [pauseButtonZone()] : []),
     ...obstacles.map(proxyZone), ...powerupZones(), proxyZone(item),
     ...(fake && fake !== skip ? [proxyZone(fake)] : [])
   ];
@@ -1043,6 +1087,12 @@ function movePlayer(dt) {
     dx += dirs[k][0] * f; dy += dirs[k][1] * f;
   });
 
+  if (controlMode === "analog" && screen === "playing" && !gameOver && !paused && !touchShown) {
+    const bx = W()/2, by = H() - Math.max(82, H()*0.14);
+    ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(bx, by, STICK_MAX, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(bx, by, 22, 0, Math.PI*2); ctx.fill();
+  }
   if (stick) {
     const vx = stick.x - stick.ox, vy = stick.y - stick.oy;
     const len = Math.hypot(vx, vy);
@@ -1913,6 +1963,7 @@ function draw() {
 
   if (screen === "login") { drawLogin(); return; }
   if (screen === "hall") { drawHall(); return; }
+  if (screen === "settings") { drawSettings(); return; }
   if (screen === "menu") {
     drawTitle("CYBER TECH GAME", 52, menuLayout().top - 38, "yellow");
     getButtons().forEach(drawButton);
@@ -1992,6 +2043,12 @@ function draw() {
   });
   ctx.globalAlpha = 1;
 
+  if (controlMode === "analog" && screen === "playing" && !gameOver && !paused && !touchShown) {
+    const bx = W()/2, by = H() - Math.max(82, H()*0.14);
+    ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(bx, by, STICK_MAX, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(bx, by, 22, 0, Math.PI*2); ctx.fill();
+  }
   if (stick) {
     const vx = stick.x - stick.ox, vy = stick.y - stick.oy;
     const len = Math.hypot(vx, vy) || 1;
@@ -2086,10 +2143,15 @@ function loop(ts) {
 }
 
 // ===== MÚSICA DE FUNDO =====
-const MUSIC_VOLUME = 0.5;   // 50% do volume do aparelho da pessoa
+const MUSIC_VOLUME = 0.5;   // volume inicial padrão
 const bgm = new Audio("assets/audio/cyberpunk-suspense.mp3");
+function setMusicVolume(value) {
+  musicVolumePercent = Math.max(0, Math.min(100, Math.round(value / 5) * 5));
+  localStorage.setItem("ctg_music_volume", String(musicVolumePercent));
+  if (typeof bgm !== "undefined") bgm.volume = musicVolumePercent / 100;
+}
 bgm.loop = true;            // repete sem parar
-bgm.volume = MUSIC_VOLUME;
+bgm.volume = musicVolumePercent / 100;
 bgm.preload = "auto";
 
 let musicStarted = false;
