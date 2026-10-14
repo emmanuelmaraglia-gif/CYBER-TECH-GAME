@@ -112,15 +112,15 @@ const DB = (() => {
       },
 
       async getLeaderboards() {
-        let snap = await metaRef.get();
-        if (snap.exists && snap.data().updatedAt && Date.now() - snap.data().updatedAt.toMillis() >= DAY) {
-          try { snap = await rebuildIfDue(false); } catch (e) { snap = await metaRef.get(); }
-        }
-        if (!snap.exists) {
-          return { easy: [], hard: [], boss: [], updatedAt: Date.now() };
-        }
-        const d = snap.data();
-        return { easy: d.easy || [], hard: d.hard || [], boss: d.boss || [], updatedAt: d.updatedAt ? d.updatedAt.toMillis() : Date.now() };
+        // Sempre consulta os jogadores diretamente ao abrir o Hall da Fama.
+        // Não depende da fotografia "meta/leaderboard", que pode ficar vazia
+        // ou desatualizada por até 24 horas.
+        const [easy, hard, boss] = await Promise.all([
+          readTop("easyBest", "desc"),
+          readTop("hardBest", "desc"),
+          readTop("bossBestMs", "asc")
+        ]);
+        return { easy, hard, boss, updatedAt: Date.now() };
       }
     };
   }
@@ -646,7 +646,10 @@ function menuLayout() {
 // ----- HALL DA FAMA -----
 function openHall() {
   screen = "hall"; hallTab = 0; hallState = "loading";
-  DB.getLeaderboards().then(d => { hall = d; hallState = "ok"; }).catch(() => { hallState = "error"; });
+  DB.getLeaderboards().then(d => { hall = d; hallState = "ok"; }).catch(err => {
+    hallState = "error";
+    console.error("Erro ao carregar o Hall da Fama:", err);
+  });
 }
 
 function hallLayout() {
@@ -1023,7 +1026,9 @@ function resolveKnightWall(oldY) {
 function movePlayer(dt) {
   // Stamina: correr gasta, descansar recupera; zerada, só volta a correr ao recuperar um pouco
   if (exhausted) running = false;
-  if (running && keys.size > 0) { stamina = Math.max(0, stamina - STAMINA_DRAIN * dt); staminaDelay = 0.6; }
+  const stickMoving = !!(stick && Math.hypot(stick.x - stick.ox, stick.y - stick.oy) > 8);
+  const movingInput = keys.size > 0 || stickMoving;
+  if (running && movingInput) { stamina = Math.max(0, stamina - STAMINA_DRAIN * dt); staminaDelay = 0.6; }
   else { staminaDelay -= dt; if (staminaDelay <= 0) stamina = Math.min(STAMINA_MAX, stamina + STAMINA_REGEN * dt); }
   if (stamina <= 0) { exhausted = true; running = false; }
   else if (exhausted && stamina >= STAMINA_RESUME) exhausted = false;
@@ -1322,7 +1327,7 @@ function updateHazards(dt) {
     }
     if (invuln <= 0 && Math.hypot(bo.x - pcx, bo.y - pcy) < player.size / 2 + 4) { damagePlayer(bo.fury ? 20 : 10); return false; }
     if (bo.x < 0 || bo.x > W() || bo.y < 0 || bo.y > H()) {
-      if (bo.fury && bo.bounces < 3) {                // na fúria ricocheteia até 3 vezes
+      if (bo.fury && bo.bounces < 2) {                // na fúria ricocheteia até 2 vezes
         bo.bounces++;
         if (bo.x < 0 || bo.x > W()) { bo.vx = -bo.vx; bo.x = Math.max(0, Math.min(W(), bo.x)); }
         if (bo.y < 0 || bo.y > H()) { bo.vy = -bo.vy; bo.y = Math.max(0, Math.min(H(), bo.y)); }
@@ -1668,6 +1673,11 @@ function updateBoss(dt) {
 
   [updateBossFight, updatePeepFight, updateKnightFight][bossIdx](dt);
   if (gameOver) return;
+  // Contato corporal com BULL e PEEP causa 15 de dano; a invulnerabilidade evita dano contínuo a cada frame.
+  if (boss && bossIdx < 2 && invuln <= 0 && overlap(player, boss)) {
+    damagePlayer(15);
+    if (gameOver) return;
+  }
   updateHazards(dt);
   if (gameOver) return;
 
