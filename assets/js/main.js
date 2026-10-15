@@ -571,10 +571,158 @@ const sanitizeName = v => v.replace(/[^\p{L}\p{N} _-]/gu, "").replace(/\s{2,}/g,
 const validName = n => n.length >= 3 && n.length <= 20;
 function setLoginMsg(text, ok) { loginMsg = text; loginMsgOk = !!ok; }
 
+// Filtro multilingue para combinações numéricas proibidas no nome.
+// A normalização remove acentos e trata hífens/pontuação como separadores.
+const normalizeNumberWords = value => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const NUMBER_WORDS = {
+  six: ["six", "seis", "sei", "sis", "seis", "seis", "sechs", "zes", "sex", "seks", "kuusi", "shest", "shest", "liu", "roku", "yuk", "chhah", "chhe", "choy", "sita", "shash", "sześć", "szesc", "sześć", "sze", "sest", "sest", "sáu", "sau", "enam", "anim", "si", "sitta", "sitta", "sitta", "sitt", "sittin", "sittun", "six", "sixieme"],
+  seven: ["seven", "sete", "siete", "sept", "sieben", "zeven", "sju", "syv", "seitsemän", "seitsem", "siedem", "sedm", "sim", "sem", "epta", "yedi", "sab'a", "sabaa", "saba", "sheva", "shiva", "saat", "sat", "sapt", "tujuh", "bay", "qi", "nana", "shichi", "ilgop", "ilgot", "hét", "sedam", "sedam", "sedam", "sette", "sju", "septyni", "septyni", "seitse", "seitseman", "fitu", "saba"],
+  sixty: ["sixty", "soixante", "sesenta", "sessenta", "sessanta", "sechzig", "zestig", "sextio", "seksti", "sexti", "kuusikymmenta", "shestdesyat", "shestdesiat", "szescdziesiat", "sześćdziesiąt", "šedesát", "sedesat", "saessak", "rokujuu", "rokujū", "liushi", "liu shi", "altmis", "altmış", "sittun", "sittin", "saath", "saTh", "satth"],
+  four: ["four", "quatre", "cuatro", "quattro", "vier", "vier", "fyra", "fire", "nelja", "chetyre", "cztery", "ctyri", "dort", "dort", "arbaa", "arba", "empat", "bon", "si", "yon", "shi", "yon", "net", "char", "chaar", "negy", "neli", "neli", "fourth", "empat", "patru", "patru", "cuatro", "kvar", "neljä", "nelja", "tetras", "cuatro"],
+  forty: ["forty", "quarante", "cuarenta", "quarenta", "quaranta", "vierzig", "veertig", "fyrtio", "fyrre", "neljakymmenta", "sorok", "czterdziesci", "czterdzieści", "ctyricet", "kyrti", "kirk", "kirk", "karante", "chetyrdesyat", "chotrom", "chulop", "yonjuu", "yonju", "sish", "arbaun", "chalis", "chollis"],
+  two: ["two", "deux", "dos", "due", "zwei", "twee", "tva", "to", "kaksi", "dva", "dve", "dwa", "dwie", "iki", "ithnan", "ithnayn", "shnayim", "do", "hai", "dua", "hai", "song", "er", "ni", "i", "dois", "duas", "du", "twо", "twee", "dous", "duo", "dva", "dve", "bi", "rendu", "randu", "dua", "dalawa", "duha"],
+  one: ["one", "um", "uma", "uno", "una", "un", "une", "eins", "ein", "een", "ett", "en", "yksi", "odin", "odin", "jeden", "jeden", "bir", "wahid", "wahed", "ek", "ichi", "il", "satu", "mot", "yi", "yat", "eka", "satu"]
+};
+// Inclui também as formas de dezenas para cobrir expressões como "sessenta e sete" e "quarenta e dois".
+const hasAnyNumberWord = (tokens, forms) => tokens.some(token => forms.includes(token));
+function forbiddenNameCombinationKind(name) {
+  const normalized = normalizeNumberWords(name);
+  const tokens = normalized ? normalized.split(/\s+/) : [];
+  const compact = normalized.replace(/\s+/g, "");
+  const hasDigit6 = /6/.test(name), hasDigit7 = /7/.test(name);
+  const hasDigit4 = /4/.test(name), hasDigit2 = /2/.test(name), hasDigit1 = /1/.test(name);
+  if (hasDigit6 && hasDigit7) return "67";
+  if (hasDigit4 && hasDigit2) return "42";
+  if (hasDigit6 && hasDigit1) return "61";
+
+  const sixWords = NUMBER_WORDS.six.concat(NUMBER_WORDS.sixty);
+  const sevenWords = NUMBER_WORDS.seven;
+  const fourWords = NUMBER_WORDS.four.concat(NUMBER_WORDS.forty);
+  const twoWords = NUMBER_WORDS.two;
+  const oneWords = NUMBER_WORDS.one;
+  if (hasAnyNumberWord(tokens, sixWords) && hasAnyNumberWord(tokens, sevenWords)) return "67";
+  if (hasAnyNumberWord(tokens, fourWords) && hasAnyNumberWord(tokens, twoWords)) return "42";
+  if (hasAnyNumberWord(tokens, sixWords) && hasAnyNumberWord(tokens, oneWords)) return "61";
+
+  // Formas compostas e traduções frequentes das dezenas, com ou sem espaços/pontuação.
+  const compactForms = forms => forms.some(form => compact.includes(normalizeNumberWords(form).replace(/\s+/g, "")));
+  if (compactForms([
+    "sessenta e sete", "sixty seven", "soixante sept", "sesenta y siete", "sessanta e sette", "sechzig sieben", "zestig zeven",
+    "sechzig sieben", "szescdziesiat siedem", "šedesát sedm", "sedesat sedam", "shestdesyat sem", "shestdesyat sem", "liushi qi",
+    "rokujuu nana", "rokujuu shichi", "yukju seot", "altmis yedi", "sittio sju", "seksti syv", "kuusikymmenta seitseman"
+  ])) return "67";
+  if (compactForms([
+    "quarenta e dois", "forty two", "quarante deux", "cuarenta y dos", "quaranta e due", "vierzig zwei", "veertig twee",
+    "czterdziesci dwa", "štyridsať dva", "sorok dva", "yonjuu ni", "liushi er", "arbaain ithnan", "chalis do", "neljakymmenta kaksi"
+  ])) return "42";
+  if (compactForms([
+    "sessenta e um", "sixty one", "soixante et un", "soixante un", "sesenta y uno", "sessanta e uno", "sechzig eins", "zestig een",
+    "szescdziesiat jeden", "šedesát jedna", "sedesat jedan", "shestdesyat odin", "liushi yi", "rokujuu ichi", "altmis bir", "sittio ett", "seksti en"
+  ])) return "61";
+  return "";
+}
+function forbiddenNameCombination(name) {
+  return forbiddenNameCombinationKind(name) ? "Tá achando que vai farmar aura betinha?" : "";
+}
+
+// Filtro de nomes ofensivos: cobre palavrões, insultos e termos discriminatórios comuns
+// em português, inglês, espanhol, francês e alemão. A normalização também reduz
+// tentativas simples de evasão com números (ex.: 4ssh0le) e letras repetidas.
+const OFFENSIVE_NAME_MESSAGE = "Esse nome não é permitido. Escolha outro!";
+const offensiveWords = new Set((`
+porra caralho cacete merda bosta bostaço foda foder fodeu fodase pqp puta puto putinha putaria cu cuzao cuzão arrombado babaca otario otaria idiota imbecil desgracado desgracada vagabundo vagabunda corno corna escroto escrota lixo nojento nojenta vaca cadela filhodaputa fodido fodida viado viada bicha sapatão sapatona traveco nazista nazi racista racismo xenofobo homofobico machista fascista
+fuck fucking fucked motherfucker shit bullshit bitch bastard asshole asswipe dick dickhead prick cunt whore slut piss douchebag dumbass jackass twat wanker bollocks arsehole faggot fag shemale tranny nigger nigga chink spic kike wetback cracker retard retarded nazi hitler
+puta puto mierda joder jodido cabron cabrona pendejo pendeja gilipollas coño maricon zorra perra hijodeputa malparido malparida
+merde putain connard connasse salope encule enculer pute batard con conne salaud tapette pede
+scheisse arschloch hurensohn fotze fick ficke schwuchtel miststuck
+`).split(/\s+/).map(w => w.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "").toLowerCase()).filter(Boolean));
+function normalizeForOffensiveCheck(value) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[0134578@$!]/g, ch => ({"0":"o","1":"i","3":"e","4":"a","5":"s","7":"t","8":"b","@":"a","$":"s","!":"i"}[ch] || ch))
+    .replace(/(.)\1{2,}/g, "$1$1")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+}
+function offensiveNameDetected(name) {
+  const normalized = normalizeForOffensiveCheck(name);
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  // Bloqueia palavras inteiras para evitar falsos positivos em nomes comuns.
+  if (tokens.some(token => offensiveWords.has(token))) return true;
+  // Também bloqueia algumas expressões ofensivas compostas, mesmo com espaços/hífens.
+  const compact = normalized.replace(/\s+/g, "");
+  return ["sonofabitch", "motherfucker", "hijodeputa", "filhodaputa", "filhadaputa", "goawaynazi", "whitepower", "heilhitler", "killall", "racista", "homofobico", "xenofobo", "nazi"].some(term => compact.includes(term)) ||
+    [...offensiveWords].some(term => term.length >= 5 && compact.includes(term));
+}
+function blockedNameReason(name) {
+  return forbiddenNameCombination(name) || (offensiveNameDetected(name) ? OFFENSIVE_NAME_MESSAGE : "");
+}
+
+// Efeito de áudio da mensagem de zoeira: primeiro a voz enviada pelo usuário,
+// depois o vídeo/música selecionado no YouTube, usando o player oficial incorporado.
+const auraVoice = new Audio("assets/audio/aura-betinha.ogg");
+auraVoice.preload = "auto";
+let auraEffectActive = false;
+let auraPlayer = null;
+let auraPlayerReady = false;
+let auraYTRequested = false;
+function requestAuraYouTubePlayer() {
+  if (auraYTRequested) return;
+  auraYTRequested = true;
+  window.onYouTubeIframeAPIReady = () => {
+    auraPlayer = new YT.Player("auraPhonkPlayer", {
+      videoId: "orI5sxdic9Q",
+      playerVars: { autoplay: 0, controls: 1, playsinline: 1, rel: 0 },
+      events: { onReady: () => {
+        auraPlayerReady = true;
+        if (auraEffectActive && auraVoice.ended) { try { auraPlayer.playVideo(); } catch (e) {} }
+      } }
+    });
+  };
+  const tag = document.createElement("script");
+  tag.src = "https://www.youtube.com/iframe_api";
+  document.head.appendChild(tag);
+}
+requestAuraYouTubePlayer();
+function playAuraEffect() {
+  if (auraEffectActive) return;
+  auraEffectActive = true;
+  const playerBox = document.getElementById("auraPhonkBox");
+  if (playerBox) playerBox.classList.remove("aura-phonk-hidden");
+  try { if (auraPlayerReady && auraPlayer) auraPlayer.stopVideo(); } catch (e) {}
+  auraVoice.pause();
+  auraVoice.currentTime = 0;
+  const startPhonk = () => {
+    try {
+      if (auraPlayerReady && auraPlayer) auraPlayer.playVideo();
+      else if (playerBox) playerBox.classList.add("aura-phonk-waiting");
+    } catch (e) {}
+  };
+  auraVoice.onended = startPhonk;
+  auraVoice.onerror = startPhonk;
+  auraVoice.play().catch(() => startPhonk());
+}
+let lastAuraKind = "";
+function stopAuraEffect() {
+  auraEffectActive = false;
+  auraVoice.pause();
+  auraVoice.currentTime = 0;
+  const playerBox = document.getElementById("auraPhonkBox");
+  if (playerBox) playerBox.classList.add("aura-phonk-hidden");
+  try { if (auraPlayerReady && auraPlayer) auraPlayer.stopVideo(); } catch (e) {}
+}
 nameInput.addEventListener("input", () => {
   const clean = sanitizeName(nameInput.value);
   if (clean !== nameInput.value) nameInput.value = clean;
-  loginArmed = false; setLoginMsg("", false);        // mudou o nome: a confirmação recomeça
+  loginArmed = false;
+  const numericKind = forbiddenNameCombinationKind(nameInput.value);
+  const numericReason = numericKind ? "Tá achando que vai farmar aura betinha?" : "";
+  const blockedReason = numericReason || (offensiveNameDetected(nameInput.value) ? OFFENSIVE_NAME_MESSAGE : "");
+  setLoginMsg(blockedReason || "", false);        // valida durante a digitação e novamente ao confirmar
+  // Toca a sequência quando o nome passa a conter uma combinação proibida nova.
+  // O tipo (67/42/61) é usado como chave para não reiniciar a voz a cada tecla.
+  if (numericKind && numericKind !== lastAuraKind) playAuraEffect();
+  else if (!numericKind && lastAuraKind && auraEffectActive) stopAuraEffect();
+  lastAuraKind = numericKind;
 });
 nameInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); loginClick(); } });
 
@@ -582,6 +730,8 @@ async function loginClick() {
   if (loginBusy || screen !== "login") return;
   const name = nameInput.value.trim().replace(/\s+/g, " ");
   if (!validName(name)) { loginArmed = false; setLoginMsg("Use de 3 a 20 caracteres (letras, números, espaço, _ ou -).", false); return; }
+  const blockedReason = blockedNameReason(name);
+  if (blockedReason) { loginArmed = false; setLoginMsg(blockedReason, false); if (forbiddenNameCombination(name)) playAuraEffect(); return; }
   loginBusy = true;
   try {
     if (!loginArmed) {                               // 1º clique: confere se o nome está livre e mostra o aviso
