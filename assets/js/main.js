@@ -180,7 +180,7 @@ const DB = (() => {
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const runnerIcon = new Image();
-runnerIcon.src = "assets/images/running-icon.png";
+runnerIcon.src = "assets/imagens/running-icon.png";
 
 // CONFIGURAÇÕES
 const TOTAL_OBSTACLES = 50;
@@ -857,7 +857,7 @@ function drawAnalog() {
   // Botão de corrida à direita: usa o ícone fornecido pelo usuário, com 30% de opacidade.
   const rb = sprintBase();
   ctx.save();
-  ctx.globalAlpha = 1; // a opacidade de 30% já é aplicada pelo contexto externo
+  ctx.globalAlpha = 0.3; // mantém o botão e o ícone de correr com 30% de opacidade
   ctx.shadowColor = sprintHeld ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.35)";
   ctx.shadowBlur = sprintHeld ? 14 : 6;
   ctx.fillStyle = sprintHeld ? "rgba(0,190,255,0.98)" : "rgba(0,160,255,0.86)";
