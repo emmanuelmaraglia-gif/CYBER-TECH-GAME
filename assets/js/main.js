@@ -179,6 +179,8 @@ const DB = (() => {
 // ################################################################
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
+const runnerIcon = new Image();
+runnerIcon.src = "assets/images/running-icon.png";
 
 // CONFIGURAÇÕES
 const TOTAL_OBSTACLES = 50;
@@ -849,23 +851,17 @@ function drawAnalog() {
   ctx.beginPath(); ctx.arc(b.x, b.y, 22, 0, Math.PI * 2); ctx.fill();                              // centro (repouso)
   ctx.fillStyle = "rgba(255,255,0,0.6)";
   ctx.beginPath(); ctx.arc(kx, ky, 22, 0, Math.PI * 2); ctx.fill();                                // bolinha
-  // Botão de corrida à direita: precisa ser segurado junto com o analógico.
+  // Botão de corrida à direita: usa o ícone fornecido pelo usuário.
   const rb = sprintBase();
   ctx.shadowColor = sprintHeld ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.35)";
   ctx.shadowBlur = sprintHeld ? 14 : 6;
-  ctx.fillStyle = sprintHeld ? "rgba(0,190,255,0.95)" : "rgba(0,160,255,0.78)";
+  ctx.fillStyle = sprintHeld ? "rgba(0,190,255,0.98)" : "rgba(0,160,255,0.86)";
   ctx.beginPath(); ctx.arc(rb.x, rb.y, SPRINT_RADIUS, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = 0;
-  ctx.strokeStyle = "#fff"; ctx.fillStyle = "#fff"; ctx.lineWidth = 5;
-  ctx.lineCap = "round"; ctx.lineJoin = "round";
-  ctx.beginPath(); ctx.arc(rb.x + 5, rb.y - 19, 5, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(rb.x + 1, rb.y - 11); ctx.lineTo(rb.x - 7, rb.y + 1);
-  ctx.lineTo(rb.x + 6, rb.y + 7); ctx.lineTo(rb.x + 14, rb.y - 2);
-  ctx.moveTo(rb.x - 5, rb.y - 5); ctx.lineTo(rb.x - 18, rb.y - 1);
-  ctx.moveTo(rb.x - 7, rb.y + 1); ctx.lineTo(rb.x - 17, rb.y + 15);
-  ctx.moveTo(rb.x + 6, rb.y + 7); ctx.lineTo(rb.x + 18, rb.y + 15);
-  ctx.stroke();
+  if (runnerIcon.complete && runnerIcon.naturalWidth) {
+    const iconSize = 52;
+    ctx.drawImage(runnerIcon, rb.x - iconSize / 2, rb.y - iconSize / 2, iconSize, iconSize);
+  }
   ctx.restore();
 }
 
@@ -893,31 +889,34 @@ function setMusic(v) { settings.music = Math.max(0, Math.min(100, Math.round(v /
 function setControl(c) { settings.control = c; stick = null; stickRunning = false; sprintHeld = false; sprintPointer = null; saveSettings(); }
 
 function settingsLayout() {
-  const c = H() < 480, pw = Math.min(W() - 30, 460), x0 = W() / 2 - pw / 2;
-  const titleSize = c ? 26 : 34, titleY = c ? 28 : 44;
-  const secY1 = c ? 58 : 96;
-  const btnY = secY1 + (c ? 8 : 12), btnH = c ? 36 : 48, bw = (pw - 12) / 2;
-  ctx.font = H() < 480 ? "12px Arial" : "14px Arial";
+  const compact = H() < 480;
+  // A descrição usa praticamente toda a largura do celular, sem o limite antigo de 460px.
+  const pw = Math.max(100, W() - 24), x0 = (W() - pw) / 2;
+  const titleSize = compact ? 26 : 34, titleY = compact ? 28 : 44;
+  const secY1 = compact ? 58 : 96;
+  const btnY = secY1 + (compact ? 8 : 12), btnH = compact ? 36 : 48, bw = (pw - 12) / 2;
+  ctx.font = compact ? "12px Arial" : (W() < 390 ? "13px Arial" : "14px Arial");
   const desc = wrapText(settings.control === "arrows"
     ? "Use as setinhas para se mover. Para correr, pressione a mesma seta 2 vezes rapidamente."
-    : "Mova o analógico à esquerda. Para correr, mantenha o botão com o bonequinho pressionado enquanto move o analógico.", pw - 8);
-  const descY = btnY + btnH + (c ? 18 : 24);
-  const secY2 = descY + desc.length * (c ? 15 : 18) + (c ? 14 : 22);
-  const rowY = secY2 + (c ? 8 : 12), rowH = c ? 36 : 48, sq = rowH;
-  const backY = rowY + rowH + (c ? 18 : 28), backH = c ? 34 : 44;
+    : "Mova o analógico à esquerda. Para correr, mantenha pressionado o botão com o bonequinho correndo à direita enquanto move o analógico. Correr consome stamina.", pw - 12);
+  const descLineH = compact ? 15 : (W() < 390 ? 17 : 19);
+  const descY = btnY + btnH + (compact ? 18 : 24);
+  // Espaço extra separa a explicação dos controles de volume e do botão de voltar.
+  const secY2 = descY + desc.length * descLineH + (compact ? 26 : 38);
+  const rowY = secY2 + (compact ? 10 : 14), rowH = compact ? 36 : 48, sq = rowH;
+  const backY = rowY + rowH + (compact ? 34 : 48), backH = compact ? 36 : 46;
   return {
-    titleSize, titleY, secY1, secY2, descY, desc, pw, x0, rowY, rowH,
+    titleSize, titleY, secY1, secY2, descY, desc, descLineH, pw, x0, rowY, rowH,
     bar: { x: x0 + sq + 10, y: rowY, w: pw - 2 * sq - 20, h: rowH },
     buttons: [
-      { id: "ctlArrows", label: "SETINHAS", font: c ? 15 : 18, outline: settings.control !== "arrows", x: x0, y: btnY, w: bw, h: btnH },
-      { id: "ctlAnalog", label: "ANALÓGICO", font: c ? 15 : 18, outline: settings.control !== "analog", x: x0 + bw + 12, y: btnY, w: bw, h: btnH },
+      { id: "ctlArrows", label: "SETINHAS", font: compact ? 15 : 18, outline: settings.control !== "arrows", x: x0, y: btnY, w: bw, h: btnH },
+      { id: "ctlAnalog", label: "ANALÓGICO", font: compact ? 15 : 18, outline: settings.control !== "analog", x: x0 + bw + 12, y: btnY, w: bw, h: btnH },
       { id: "volDown", label: "−", font: 30, color: settings.music <= 0 ? "#555" : "yellow", x: x0, y: rowY, w: sq, h: rowH },
       { id: "volUp", label: "+", font: 30, color: settings.music >= 100 ? "#555" : "yellow", x: x0 + pw - sq, y: rowY, w: sq, h: rowH },
-      { id: "back", label: "VOLTAR", font: 18, outline: true, x: W() / 2 - 80, y: backY, w: 160, h: backH }
+      { id: "back", label: "VOLTAR", font: 18, outline: true, x: W() / 2 - Math.min(160, pw * 0.38), y: backY, w: Math.min(320, pw * 0.76), h: backH }
     ]
   };
 }
-
 function drawSettings() {
   const L = settingsLayout();
   drawTitle("CONFIGURAÇÕES", L.titleSize, L.titleY, "yellow");
@@ -925,9 +924,8 @@ function drawSettings() {
   ctx.fillText("MOVIMENTO", W() / 2, L.secY1);
   ctx.fillText("VOLUME DA MÚSICA", W() / 2, L.secY2);
   L.buttons.forEach(drawButton);
-  ctx.fillStyle = "rgba(255,255,255,0.9)"; ctx.font = (H() < 480 ? "12px Arial" : "14px Arial");
-  const descLineH = H() < 480 ? 15 : 18;
-  L.desc.forEach((ln, i) => ctx.fillText(ln, W() / 2, L.descY + i * descLineH));
+  ctx.fillStyle = "rgba(255,255,255,0.9)"; ctx.font = (H() < 480 ? "12px Arial" : (W() < 390 ? "13px Arial" : "14px Arial"));
+  L.desc.forEach((ln, i) => ctx.fillText(ln, W() / 2, L.descY + i * L.descLineH));
   const b = L.bar;                                   // barra de volume (0 a 100, de 5 em 5)
   ctx.fillStyle = "rgba(255,255,255,0.1)"; ctx.fillRect(b.x, b.y, b.w, b.h);
   ctx.fillStyle = "rgba(0,229,255,0.55)"; ctx.fillRect(b.x, b.y, b.w * settings.music / 100, b.h);
