@@ -180,7 +180,7 @@ const DB = (() => {
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const runnerIcon = new Image();
-runnerIcon.src = "assets/imagens/running-icon.png";
+runnerIcon.src = "assets/images/running-icon.png";
 
 // CONFIGURAÇÕES
 const TOTAL_OBSTACLES = 50;
@@ -847,14 +847,17 @@ function drawAnalog() {
     kx = b.x + vx * k; ky = b.y + vy * k;
   }
   ctx.save();
+  ctx.globalAlpha = 0.3; // todos os controles do analógico ficam com 30% de opacidade
   ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
   ctx.beginPath(); ctx.arc(b.x, b.y, STICK_MAX, 0, Math.PI * 2); ctx.stroke();
   ctx.fillStyle = "rgba(255,255,255,0.12)";
   ctx.beginPath(); ctx.arc(b.x, b.y, 22, 0, Math.PI * 2); ctx.fill();                              // centro (repouso)
   ctx.fillStyle = "rgba(255,255,0,0.6)";
   ctx.beginPath(); ctx.arc(kx, ky, 22, 0, Math.PI * 2); ctx.fill();                                // bolinha
-  // Botão de corrida à direita: usa o ícone fornecido pelo usuário.
+  // Botão de corrida à direita: usa o ícone fornecido pelo usuário, com 30% de opacidade.
   const rb = sprintBase();
+  ctx.save();
+  ctx.globalAlpha = 1; // a opacidade de 30% já é aplicada pelo contexto externo
   ctx.shadowColor = sprintHeld ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.35)";
   ctx.shadowBlur = sprintHeld ? 14 : 6;
   ctx.fillStyle = sprintHeld ? "rgba(0,190,255,0.98)" : "rgba(0,160,255,0.86)";
@@ -864,6 +867,7 @@ function drawAnalog() {
     const iconSize = 52;
     ctx.drawImage(runnerIcon, rb.x - iconSize / 2, rb.y - iconSize / 2, iconSize, iconSize);
   }
+  ctx.restore(); // restaura a opacidade dos demais controles
   ctx.restore();
 }
 

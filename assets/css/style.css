@@ -76,6 +76,7 @@ canvas {
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
   cursor: pointer;
+  opacity: 0.3;
 }
 
 .ctrl-btn svg {
