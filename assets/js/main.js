@@ -180,7 +180,7 @@ const DB = (() => {
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const runnerIcon = new Image();
-runnerIcon.src = "assets/images/running-icon.png";
+runnerIcon.src = "assets/imagens/running-icon.png";
 
 // CONFIGURAÇÕES
 const TOTAL_OBSTACLES = 50;
@@ -890,23 +890,25 @@ function setControl(c) { settings.control = c; stick = null; stickRunning = fals
 
 function settingsLayout() {
   const compact = H() < 480;
-  // A descrição usa praticamente toda a largura do celular, sem o limite antigo de 460px.
-  const pw = Math.max(100, W() - 24), x0 = (W() - pw) / 2;
+  // Descrição alinhada à esquerda e usando a largura útil inteira da tela.
+  const margin = Math.max(12, Math.min(22, W() * 0.035));
+  const pw = Math.max(100, W() - margin * 2), x0 = margin;
   const titleSize = compact ? 26 : 34, titleY = compact ? 28 : 44;
   const secY1 = compact ? 58 : 96;
   const btnY = secY1 + (compact ? 8 : 12), btnH = compact ? 36 : 48, bw = (pw - 12) / 2;
-  ctx.font = compact ? "12px Arial" : (W() < 390 ? "13px Arial" : "14px Arial");
+  const descFont = H() < 480 ? 12 : (W() < 390 ? 13 : 14);
+  ctx.font = descFont + "px Arial";
   const desc = wrapText(settings.control === "arrows"
     ? "Use as setinhas para se mover. Para correr, pressione a mesma seta 2 vezes rapidamente."
-    : "Mova o analógico à esquerda. Para correr, mantenha pressionado o botão com o bonequinho correndo à direita enquanto move o analógico. Correr consome stamina.", pw - 12);
+    : "Mova o analógico à esquerda. Para correr, mantenha pressionado o botão com o bonequinho correndo à direita enquanto move o analógico. Correr consome stamina.", pw - 8);
   const descLineH = compact ? 15 : (W() < 390 ? 17 : 19);
-  const descY = btnY + btnH + (compact ? 18 : 24);
-  // Espaço extra separa a explicação dos controles de volume e do botão de voltar.
-  const secY2 = descY + desc.length * descLineH + (compact ? 26 : 38);
-  const rowY = secY2 + (compact ? 10 : 14), rowH = compact ? 36 : 48, sq = rowH;
-  const backY = rowY + rowH + (compact ? 34 : 48), backH = compact ? 36 : 46;
+  const descY = btnY + btnH + (compact ? 22 : 28);
+  // Volume e botão voltar são posicionados dinamicamente abaixo de TODA a descrição.
+  const secY2 = descY + desc.length * descLineH + (compact ? 32 : 42);
+  const rowY = secY2 + (compact ? 12 : 16), rowH = compact ? 36 : 48, sq = rowH;
+  const backY = rowY + rowH + (compact ? 40 : 54), backH = compact ? 36 : 46;
   return {
-    titleSize, titleY, secY1, secY2, descY, desc, descLineH, pw, x0, rowY, rowH,
+    titleSize, titleY, secY1, secY2, descY, desc, descLineH, descX: x0 + 4, pw, x0, rowY, rowH,
     bar: { x: x0 + sq + 10, y: rowY, w: pw - 2 * sq - 20, h: rowH },
     buttons: [
       { id: "ctlArrows", label: "SETINHAS", font: compact ? 15 : 18, outline: settings.control !== "arrows", x: x0, y: btnY, w: bw, h: btnH },
@@ -925,7 +927,9 @@ function drawSettings() {
   ctx.fillText("VOLUME DA MÚSICA", W() / 2, L.secY2);
   L.buttons.forEach(drawButton);
   ctx.fillStyle = "rgba(255,255,255,0.9)"; ctx.font = (H() < 480 ? "12px Arial" : (W() < 390 ? "13px Arial" : "14px Arial"));
-  L.desc.forEach((ln, i) => ctx.fillText(ln, W() / 2, L.descY + i * L.descLineH));
+  ctx.textAlign = "left";
+  L.desc.forEach((ln, i) => ctx.fillText(ln, L.descX, L.descY + i * L.descLineH));
+  ctx.textAlign = "center";
   const b = L.bar;                                   // barra de volume (0 a 100, de 5 em 5)
   ctx.fillStyle = "rgba(255,255,255,0.1)"; ctx.fillRect(b.x, b.y, b.w, b.h);
   ctx.fillStyle = "rgba(0,229,255,0.55)"; ctx.fillRect(b.x, b.y, b.w * settings.music / 100, b.h);
