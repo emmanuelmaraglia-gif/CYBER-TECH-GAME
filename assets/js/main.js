@@ -180,7 +180,7 @@ const DB = (() => {
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const runnerIcon = new Image();
-runnerIcon.src = "assets/images/running-icon.png";
+runnerIcon.src = "assets/imagens/running-icon.png";
 
 // CONFIGURAÇÕES
 const TOTAL_OBSTACLES = 50;
@@ -1656,10 +1656,16 @@ function drawHazards() {
     const scaleAlong = 180 / 130;
     const scaleAcross = visualCollisionSize / 44;
     ctx.save();
-    ctx.translate(h.pos, h.lane);
+    // O centro de transformação precisa acompanhar os eixos do cavalo:
+    // horizontal = (pos, lane); vertical = (lane, pos).
+    // Usar (pos, lane) nos dois casos deslocava visualmente os cavalos
+    // verticais na diagonal enquanto eles desciam.
+    const horseCenterX = h.dir === "h" ? h.pos : h.lane;
+    const horseCenterY = h.dir === "h" ? h.lane : h.pos;
+    ctx.translate(horseCenterX, horseCenterY);
     ctx.scale(h.dir === "h" ? scaleAlong : scaleAcross,
               h.dir === "h" ? scaleAcross : scaleAlong);
-    ctx.translate(-h.pos, -h.lane);
+    ctx.translate(-horseCenterX, -horseCenterY);
     const tl = 130;                                    // rastro de luz
     ctx.fillStyle = "rgba(0,229,255,0.22)";
     if (h.dir === "h") ctx.fillRect(h.side > 0 ? h.pos - 40 - tl : h.pos + 40, h.lane - 12, tl, 24);
