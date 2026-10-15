@@ -180,7 +180,7 @@ const DB = (() => {
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const runnerIcon = new Image();
-runnerIcon.src = "assets/imagens/running-icon.png";
+runnerIcon.src = "assets/images/running-icon.png";
 
 // CONFIGURAÇÕES
 const TOTAL_OBSTACLES = 50;
@@ -1748,7 +1748,7 @@ function drawPeep(b) {
     [0, Math.PI].forEach(off => {
       const a = (b.spinA || 0) + off;
       ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * L, cy + Math.sin(a) * L);
-      if (charge) { ctx.strokeStyle = f ? "rgba(255,106,0,0.75)" : "rgba(255,43,214,0.5)"; ctx.lineWidth = 2; ctx.setLineDash([10, 10]); ctx.stroke(); ctx.setLineDash([]); }
+      if (charge) { ctx.strokeStyle = b.fury ? "rgba(255,106,0,0.75)" : "rgba(255,43,214,0.5)"; ctx.lineWidth = 2; ctx.setLineDash([10, 10]); ctx.stroke(); ctx.setLineDash([]); }
       else { neon(col, 18); ctx.strokeStyle = col; ctx.lineWidth = 10; ctx.stroke(); noNeon(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
     });
   }
