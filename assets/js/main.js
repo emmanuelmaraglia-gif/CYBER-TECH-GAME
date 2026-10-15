@@ -180,7 +180,7 @@ const DB = (() => {
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const runnerIcon = new Image();
-runnerIcon.src = "assets/imagens/running-icon.png";
+runnerIcon.src = "assets/images/running-icon.png";
 
 // CONFIGURAÇÕES
 const TOTAL_OBSTACLES = 50;
@@ -1316,9 +1316,45 @@ function showFirstOpportunity(message, aura) {
 function stunBoss() {
   bossSet("stun");
   const cx = boss.x + boss.size / 2, cy = boss.y + boss.size / 2;
-  const dx = Math.max(0, Math.min(W() - 20, cx - Math.cos(boss.ang) * (boss.size / 2 + 30) - 10));
-  const dy = Math.max(0, Math.min(H() - 20, cy - Math.sin(boss.ang) * (boss.size / 2 + 30) - 10));
-  drop = { x: dx, y: dy, size: 20 };
+  const dropSize = 20;
+  let dx = cx - Math.cos(boss.ang) * (boss.size / 2 + 30) - dropSize / 2;
+  let dy = cy - Math.sin(boss.ang) * (boss.size / 2 + 30) - dropSize / 2;
+
+  // Os chifres do BULL ultrapassam o corpo: garanta pelo menos 10 px
+  // entre qualquer parte visível dos chifres e o bloquinho de recompensa.
+  if (boss.idx === 0) {
+    const gap = 10;
+    const hornLeft = boss.x - 16, hornRight = boss.x + boss.size + 16;
+    const hornTop = boss.y - 14, hornBottom = boss.y + 12;
+    const candidates = [
+      { x: hornLeft - gap - dropSize, y: cy - dropSize / 2, side: 'left' },
+      { x: hornRight + gap, y: cy - dropSize / 2, side: 'right' },
+      { x: cx - dropSize / 2, y: hornTop - gap - dropSize, side: 'top' },
+      { x: cx - dropSize / 2, y: hornBottom + gap, side: 'bottom' }
+    ].filter(c => c.x >= 0 && c.y >= 0 && c.x + dropSize <= W() && c.y + dropSize <= H());
+
+    const desiredX = dx + dropSize / 2, desiredY = dy + dropSize / 2;
+    candidates.sort((a, b) => Math.hypot(a.x + dropSize/2 - desiredX, a.y + dropSize/2 - desiredY) -
+                              Math.hypot(b.x + dropSize/2 - desiredX, b.y + dropSize/2 - desiredY));
+    if (candidates.length) {
+      dx = candidates[0].x;
+      dy = candidates[0].y;
+    } else {
+      // Fallback para telas muito pequenas: tenta deslocar a recompensa para
+      // uma posição visível sem sobrepor a caixa do corpo do BULL.
+      const safe = [
+        { x: Math.max(0, boss.x - dropSize - gap), y: Math.max(0, Math.min(H()-dropSize, cy-dropSize/2)) },
+        { x: Math.min(W()-dropSize, boss.x+boss.size+gap), y: Math.max(0, Math.min(H()-dropSize, cy-dropSize/2)) },
+        { x: Math.max(0, Math.min(W()-dropSize, cx-dropSize/2)), y: Math.min(H()-dropSize, boss.y+boss.size+gap) }
+      ];
+      const valid = safe.find(c => c.x >= 0 && c.y >= 0 && c.x + dropSize <= W() && c.y + dropSize <= H());
+      if (valid) { dx = valid.x; dy = valid.y; }
+    }
+  }
+  // Mantém a recompensa dentro da tela sem alterar a posição segura calculada.
+  dx = Math.max(0, Math.min(W() - dropSize, dx));
+  dy = Math.max(0, Math.min(H() - dropSize, dy));
+  drop = { x: dx, y: dy, size: dropSize };
   showFirstOpportunity("AGORA É SUA CHANCE!", boss.idx !== 1);
   if (boss.fury) { wave = { x: cx, y: cy, r: 10, hit: false }; shake = 0.5; beep(90, 0.3); }   // tremor + onda magnética
   else { shake = 0.15; beep(120, 0.15); }
@@ -1656,16 +1692,10 @@ function drawHazards() {
     const scaleAlong = 180 / 130;
     const scaleAcross = visualCollisionSize / 44;
     ctx.save();
-    // O centro de transformação precisa acompanhar os eixos do cavalo:
-    // horizontal = (pos, lane); vertical = (lane, pos).
-    // Usar (pos, lane) nos dois casos deslocava visualmente os cavalos
-    // verticais na diagonal enquanto eles desciam.
-    const horseCenterX = h.dir === "h" ? h.pos : h.lane;
-    const horseCenterY = h.dir === "h" ? h.lane : h.pos;
-    ctx.translate(horseCenterX, horseCenterY);
+    ctx.translate(h.pos, h.lane);
     ctx.scale(h.dir === "h" ? scaleAlong : scaleAcross,
               h.dir === "h" ? scaleAcross : scaleAlong);
-    ctx.translate(-horseCenterX, -horseCenterY);
+    ctx.translate(-h.pos, -h.lane);
     const tl = 130;                                    // rastro de luz
     ctx.fillStyle = "rgba(0,229,255,0.22)";
     if (h.dir === "h") ctx.fillRect(h.side > 0 ? h.pos - 40 - tl : h.pos + 40, h.lane - 12, tl, 24);
@@ -1789,7 +1819,7 @@ function drawKnight(b) {
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, b.alpha));
   if (b.state === "swing") {                           // marca neon da brecha por onde dá para passar
-    const gw = b.fury ? 80 : 100; // corresponde exatamente à fresta usada pelas ondas do KNIGHT
+    const gw = b.fury ? 60 : 100;
     neon("#4dff88", 10); ctx.strokeStyle = "rgba(77,255,136," + (0.5 + 0.5 * Math.sin(performance.now() / 80)) + ")"; ctx.lineWidth = 4;
     [b.gapX, b.gapX + gw].forEach(gx => { ctx.beginPath(); ctx.moveTo(gx, b.y + b.size); ctx.lineTo(gx, H()); ctx.stroke(); });
     noNeon();
