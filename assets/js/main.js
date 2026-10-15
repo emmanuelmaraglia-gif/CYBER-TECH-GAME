@@ -180,7 +180,7 @@ const DB = (() => {
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const runnerIcon = new Image();
-runnerIcon.src = "assets/images/running-icon.png";
+runnerIcon.src = "assets/imagens/running-icon.png";
 
 // CONFIGURAÇÕES
 const TOTAL_OBSTACLES = 50;
