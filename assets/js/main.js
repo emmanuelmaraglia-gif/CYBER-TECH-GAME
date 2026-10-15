@@ -247,8 +247,10 @@ function beep(freq, dur) {
 const W = () => canvas.width, H = () => canvas.height;
 
 function overlap(a, b, m = 0) {
-  return a.x < b.x + b.size + m && a.x + a.size > b.x - m &&
-         a.y < b.y + b.size + m && a.y + a.size > b.y - m;
+  // Também aceita zonas retangulares (w/h), usadas para reservar espaço aos controles móveis.
+  const bw = b.w ?? b.size, bh = b.h ?? b.size;
+  return a.x < b.x + bw + m && a.x + a.size > b.x - m &&
+         a.y < b.y + bh + m && a.y + a.size > b.y - m;
 }
 
 function safePosition(size, avoid, margin) {
@@ -339,7 +341,7 @@ function startGame() {
   }
 
   const hard = mode === "hard";
-  const p = safePosition(item.size, [player, pauseZone()], 80);
+  const p = safePosition(item.size, [player, pauseZone(), ...locomotionControlZones()], 80);
   item.x = p.x; item.y = p.y; keepOffPause(item);
 
   const cfg = obstacleSettings();
@@ -1088,6 +1090,34 @@ function powerupZones() { return powerups.map(proxyZone); }
 
 // Área do botão de pausa (topo, no centro): nenhum bloco vermelho/power-up nasce aí
 function pauseZone() { return { x: W() / 2 - 22, y: 8, size: 44, gap: 14, fixed: true }; }
+
+// Áreas reservadas aos controles de locomoção escolhidos nas configurações.
+// Os retângulos incluem uma margem para que os itens não apareçam parcialmente sob os botões.
+function locomotionControlZones() {
+  if (!isPhone) return [];
+  if (settings.control === "arrows") {
+    const small = W() <= 420;
+    const btn = small ? 58 : 66;
+    const gap = 10, padX = small ? 12 : 20;
+    const padY = 18; // inclui o espaço inferior dos controles
+    const leftW = btn, leftH = btn * 2 + gap;
+    const rightW = btn * 2 + gap, rightH = btn;
+    return [
+      { x: Math.max(0, padX - 12), y: H() - padY - leftH - 12, w: leftW + 24, h: leftH + 24, gap: 8, fixed: true },
+      { x: Math.max(0, W() - padX - rightW - 12), y: H() - padY - rightH - 12, w: rightW + 24, h: rightH + 24, gap: 8, fixed: true }
+    ];
+  }
+  if (settings.control === "analog") {
+    const ab = analogBase(), rb = sprintBase();
+    return [
+      { x: Math.max(0, ab.x - STICK_MAX - 18), y: ab.y - STICK_MAX - 18,
+        w: Math.min(W(), STICK_MAX * 2 + 36), h: STICK_MAX * 2 + 36, gap: 8, fixed: true },
+      { x: rb.x - SPRINT_RADIUS - 14, y: rb.y - SPRINT_RADIUS - 14,
+        w: SPRINT_RADIUS * 2 + 28, h: SPRINT_RADIUS * 2 + 28, gap: 8, fixed: true }
+    ];
+  }
+  return [];
+}
 function keepOffPause(o) {
   const z = pauseZone();
   if (overlap(o, z, z.gap)) o.y = z.y + z.size + z.gap + 2;   // garantia extra: empurra para baixo da faixa
@@ -1096,6 +1126,7 @@ function keepOffPause(o) {
 function freeAvoid(skip) {
   return [
     pauseZone(),
+    ...locomotionControlZones(),
     { x: player.x, y: player.y, size: player.size, gap: 20, fixed: true },
     ...obstacles.map(proxyZone), ...powerupZones(), proxyZone(item),
     ...(fake && fake !== skip ? [proxyZone(fake)] : [])
@@ -1347,13 +1378,24 @@ function spawnCrate() {
     { x: boss.x, y: boss.y, size: boss.size, gap: 50, fixed: true },
     { x: player.x, y: player.y, size: player.size, gap: 80, fixed: true }
   ];
+  // Mesmas zonas reservadas no Clássico: as caixas do PEEP respeitam os controles escolhidos.
+  avoid.push(...locomotionControlZones().map(z => ({ ...z, controlZone: true })));
   const rand = () => ({ x: Math.random() * Math.max(1, W() - size), y: top + Math.random() * Math.max(1, H() - top - size) });
+  const blocked = c => avoid.some(o => {
+    if (o.controlZone) {
+      const g = o.gap || 0;
+      return c.x < o.x + o.w + g && c.x + size > o.x - g &&
+             c.y < o.y + o.h + g && c.y + size > o.y - g;
+    }
+    return overlap({ x: c.x, y: c.y, size }, o, o.gap);
+  });
   let p = null;
-  for (let i = 0; i < 200 && !p; i++) {
+  for (let i = 0; i < 300 && !p; i++) {
     const c = rand();
-    if (!avoid.some(o => overlap({ x: c.x, y: c.y, size }, o, o.gap))) p = c;
+    if (!blocked(c)) p = c;
   }
-  if (!p) p = rand();
+  // Se toda a área restante estiver bloqueada, não gera a caixa em cima dos controles.
+  if (!p) return;
   crate = { x: Math.floor(p.x), y: Math.floor(p.y), size };
   showFirstOpportunity("Se algo acertasse essa caixa...", false);
 }
@@ -1380,7 +1422,7 @@ function updatePeepFight(dt) {
       b.flipT += dt;
       if (b.flipT >= (f ? 1.8 : 2.5)) {               // troca o sentido de giro
         b.flipT = 0; b.dir *= -1;
-        floats.push({ x: bcx - 10, y: bcy - b.size, text: b.dir > 0 ? "↻" : "↺", color: "#ff2bd6", life: 0.8 });
+        floats.push({ x: bcx - 10, y: bcy - b.size, text: b.dir > 0 ? "↻" : "↺", color: f ? NEON.orange : "#ff2bd6", life: 0.8 });
       }
       if (invuln <= 0) {
         for (const off of [0, Math.PI]) {
@@ -1478,6 +1520,12 @@ function updateHazards(dt) {
 
   bolts = bolts.filter(bo => {
     bo.x += bo.vx * dt; bo.y += bo.vy * dt;
+    // Parede invisível sob a HUD: tiros do PEEP não atravessam a faixa das estatísticas.
+    if (mode === "boss" && bossIdx === 1 && bo.y < BOSS_HUD_SAFE_Y) {
+      bo.y = BOSS_HUD_SAFE_Y;
+      if (bo.fury && bo.bounces < 2) { bo.vy = Math.abs(bo.vy); bo.bounces++; }
+      else return false;
+    }
     if (crate && bo.x > crate.x && bo.x < crate.x + crate.size && bo.y > crate.y && bo.y < crate.y + crate.size) {
       drop = { x: crate.x + 8, y: crate.y + 8, size: 20, life: 8, collectDelay: (boss && boss.idx === 1 && boss.fury) ? 1 : 0 };   // no modo fúria do PEEP, só pode pegar 1 s após a caixa quebrar
       floats.push({ x: crate.x, y: crate.y - 10, text: "CAIXA QUEBROU!", color: "#ffb703", life: 0.8 });
@@ -1508,7 +1556,7 @@ function updateHazards(dt) {
     h.t += dt;
     if (h.t < h.warn) return;
     h.pos += h.side * h.speed * dt;
-    const collisionScale = h.fury ? 1.5 : 1.25; // aumento em relação à área atual: +25% normal, +50% fúria
+    const collisionScale = h.fury ? 1.4 : 1.25; // fúria: +40%; o desenho usa exatamente a mesma dimensão
     const crossSize = 76.5 * collisionScale;
     const r = h.dir === "h" ? { x: h.pos - 90, y: h.lane - crossSize / 2, w: 180, h: crossSize } : { x: h.lane - crossSize / 2, y: h.pos - 90, w: crossSize, h: 180 };
     if (!h.hit && invuln <= 0 && player.x < r.x + r.w && player.x + player.size > r.x &&
@@ -1583,7 +1631,7 @@ function drawHazards() {
   }
   horses.forEach(h => {
     if (h.t < h.warn) {                                // aviso vermelho com a mesma largura da colisão
-      const warningSize = 76.5 * (h.fury ? 1.5 : 1.25);
+      const warningSize = 76.5 * (h.fury ? 1.4 : 1.25);
       ctx.fillStyle = "rgba(255,42,77," + (0.12 + 0.18 * (Math.floor(h.t * 10) % 2)) + ")";
       ctx.strokeStyle = "rgba(255,42,77,0.8)"; ctx.lineWidth = 2; ctx.setLineDash([10, 8]);
       if (h.dir === "h") { ctx.fillRect(0, h.lane - warningSize / 2, W(), warningSize); ctx.strokeRect(0, h.lane - warningSize / 2, W(), warningSize); }
@@ -1601,7 +1649,7 @@ function drawHazards() {
     }
     // Aumenta a dimensão visual transversal do cavalo até corresponder à
     // espessura da sua área de colisão, para o jogador perceber melhor o perigo.
-    const visualCollisionSize = 76.5 * (h.fury ? 1.5 : 1.25);
+    const visualCollisionSize = 76.5 * (h.fury ? 1.4 : 1.25);
     // Ajuste independente dos eixos: o cavalo ocupa exatamente a caixa de
     // colisão (180 px no sentido do movimento e visualCollisionSize no eixo transversal).
     // Os desenhos-base medem aprox. 130x44 px na horizontal; na vertical, os eixos invertem.
@@ -1641,7 +1689,7 @@ function drawHazards() {
     });
   });
   bolts.forEach(bo => {                                // lasers do PEEP: brilho + núcleo branco
-    const m = Math.hypot(bo.vx, bo.vy) || 1, col = bo.fury ? NEON.magenta : NEON.cyan;
+    const m = Math.hypot(bo.vx, bo.vy) || 1, col = bo.fury ? NEON.orange : NEON.cyan;
     ctx.beginPath(); ctx.moveTo(bo.x - bo.vx / m * 22, bo.y - bo.vy / m * 22); ctx.lineTo(bo.x, bo.y);
     neon(col, 14); ctx.strokeStyle = col; ctx.lineWidth = 6; ctx.stroke(); noNeon();
     ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
@@ -1700,7 +1748,7 @@ function drawPeep(b) {
     [0, Math.PI].forEach(off => {
       const a = (b.spinA || 0) + off;
       ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * L, cy + Math.sin(a) * L);
-      if (charge) { ctx.strokeStyle = "rgba(255,43,214,0.5)"; ctx.lineWidth = 2; ctx.setLineDash([10, 10]); ctx.stroke(); ctx.setLineDash([]); }
+      if (charge) { ctx.strokeStyle = f ? "rgba(255,106,0,0.75)" : "rgba(255,43,214,0.5)"; ctx.lineWidth = 2; ctx.setLineDash([10, 10]); ctx.stroke(); ctx.setLineDash([]); }
       else { neon(col, 18); ctx.strokeStyle = col; ctx.lineWidth = 10; ctx.stroke(); noNeon(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
     });
   }
@@ -1721,8 +1769,8 @@ function drawPeep(b) {
   if (b.state === "draw" || b.state === "gun") {       // arma laser
     ctx.translate(cx, cy); ctx.rotate(b.ang);
     ctx.fillStyle = "#1b1b2f"; ctx.fillRect(r - 4, -6, 36, 12);
-    neon(NEON.cyan, 10); ctx.strokeStyle = NEON.cyan; ctx.lineWidth = 2; ctx.strokeRect(r - 4, -6, 36, 12);
-    ctx.fillStyle = "#fff"; ctx.fillRect(r + 30, -3, 6, 6); noNeon();
+    neon(b.fury ? NEON.orange : NEON.cyan, 10); ctx.strokeStyle = b.fury ? NEON.orange : NEON.cyan; ctx.lineWidth = 2; ctx.strokeRect(r - 4, -6, 36, 12);
+    ctx.fillStyle = b.fury ? NEON.orange : "#fff"; ctx.fillRect(r + 30, -3, 6, 6); noNeon();
   }
   ctx.restore();
 }
@@ -1787,6 +1835,9 @@ function updateBoss(dt) {
     // ficou dentro dessa estrutura durante a cutscene, empurra-o para baixo
     // dela e também mantém a zona das estatísticas livre.
     keepPlayerBelowBossHud();
+    if (boss && boss.idx === 2 && bossStage === "cutscene") {
+      player.y = Math.max(player.y, Math.min(H() - player.size - 60, BOSS_HUD_SAFE_Y + 80));
+    }
     // A barra cinematográfica inferior (parede preta com borda neon azul)
     // é uma zona inacessível durante a entrada de QUALQUER boss. Se o jogador
     // estiver nela ou ultrapassar sua borda, empurra-o para cima da linha.
@@ -1819,6 +1870,13 @@ function updateBoss(dt) {
     if (stageT >= 2.5) {
       if (bossIdx < 2) {                           // próximo boss: BULL -> PEEP -> KNIGHT
         bossIdx++; bossStage = "between"; stageT = 0; boss = null; clearHazards();
+        // Ao sair do PEEP, reposiciona o jogador na arena acessível antes da entrada do KNIGHT.
+        // Evita que ele fique atrás/acima da parede invocada pelo próximo chefe.
+        if (bossIdx === 2) {
+          player.y = Math.min(H() - player.size - 60, Math.max(H() * 0.55, BOSS_HUD_SAFE_Y + 80));
+          player.x = Math.max(8, Math.min(W() - player.size - 8, player.x));
+          kb.x = 0; kb.y = 0;
+        }
         playerHP = Math.min(PLAYER_MAX_HP, playerHP + 30);
         floats.push({ x: player.x, y: player.y - 12, text: "+30 VIDA", color: "#4dff88", life: 1.2 });
       } else {
