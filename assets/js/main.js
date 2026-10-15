@@ -216,6 +216,7 @@ let score = 0, collected = 0, timeLeft = GAME_TIME, elapsed = 0, invuln = 0, fad
 let gameOver = false;
 let flash = 0, flashColor = "#fff";
 let last = 0, running = false, stick = null, audio = null;
+let sprintPointer = null, sprintHeld = false;
 let paused = false;
 let confirmMenu = false;   // pergunta "voltar ao menu?" na pausa (modo clássico)
 let stamina = STAMINA_MAX, exhausted = false, staminaDelay = 0;
@@ -320,7 +321,7 @@ function startGame() {
   score = 0; collected = 0; elapsed = 0; invuln = 0; fade = 0;
   timeLeft = GAME_TIME; gameOver = false;
   floats = []; flash = 0; stick = null; running = false; keys.clear(); paused = false;
-  confirmMenu = false; stickRunning = false;
+  confirmMenu = false; stickRunning = false; sprintHeld = false; sprintPointer = null;
   stamina = STAMINA_MAX; exhausted = false; staminaDelay = 0;
   shake = 0; furyFlash = 0; kb.x = 0; kb.y = 0;   // zera o tremor de tela
   powerups = []; puTimer = 6; magnetTime = 0; shield = 0;
@@ -820,7 +821,9 @@ let isPhone = false;          // atualizado em updateTouchControls()
 let stickRunning = false;     // true enquanto o analógico está puxado além da metade (corrida)
 const STICK_RUN_AT = 0.5;     // até 50% do limite = anda | acima de 50% = corre
 const analogOn = () => settings.control === "analog" && isPhone;
-const analogBase = () => ({ x: W() / 2, y: H() - STICK_MAX - 44 });
+const analogBase = () => ({ x: Math.max(76, W() * 0.20), y: H() - STICK_MAX - 44 });
+const sprintBase = () => ({ x: W() - Math.max(76, W() * 0.18), y: H() - 88 });
+const SPRINT_RADIUS = 42;
 
 // Direção do analógico (vetor unitário) e se está na faixa de corrida.
 // A velocidade NÃO muda com a puxada: só existem "andar" e "correr", iguais às das setinhas.
@@ -828,7 +831,7 @@ function stickInfo() {
   if (!stick) return null;
   const b = analogBase(), vx = stick.x - b.x, vy = stick.y - b.y, len = Math.hypot(vx, vy);
   if (len < 6) return null;                                   // zona morta
-  return { ux: vx / len, uy: vy / len, run: len / STICK_MAX > STICK_RUN_AT };
+  return { ux: vx / len, uy: vy / len };
 }
 
 function drawAnalog() {
@@ -840,13 +843,29 @@ function drawAnalog() {
     kx = b.x + vx * k; ky = b.y + vy * k;
   }
   ctx.save();
-  if (stick && stickRunning) { ctx.shadowColor = "rgba(255,255,255,0.3)"; ctx.shadowBlur = 28; }   // aura branca fraquinha (30%) ao correr
   ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
   ctx.beginPath(); ctx.arc(b.x, b.y, STICK_MAX, 0, Math.PI * 2); ctx.stroke();
   ctx.fillStyle = "rgba(255,255,255,0.12)";
   ctx.beginPath(); ctx.arc(b.x, b.y, 22, 0, Math.PI * 2); ctx.fill();                              // centro (repouso)
   ctx.fillStyle = "rgba(255,255,0,0.6)";
   ctx.beginPath(); ctx.arc(kx, ky, 22, 0, Math.PI * 2); ctx.fill();                                // bolinha
+  // Botão de corrida à direita: precisa ser segurado junto com o analógico.
+  const rb = sprintBase();
+  ctx.shadowColor = sprintHeld ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.35)";
+  ctx.shadowBlur = sprintHeld ? 14 : 6;
+  ctx.fillStyle = sprintHeld ? "rgba(0,190,255,0.95)" : "rgba(0,160,255,0.78)";
+  ctx.beginPath(); ctx.arc(rb.x, rb.y, SPRINT_RADIUS, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "#fff"; ctx.fillStyle = "#fff"; ctx.lineWidth = 5;
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.arc(rb.x + 5, rb.y - 19, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(rb.x + 1, rb.y - 11); ctx.lineTo(rb.x - 7, rb.y + 1);
+  ctx.lineTo(rb.x + 6, rb.y + 7); ctx.lineTo(rb.x + 14, rb.y - 2);
+  ctx.moveTo(rb.x - 5, rb.y - 5); ctx.lineTo(rb.x - 18, rb.y - 1);
+  ctx.moveTo(rb.x - 7, rb.y + 1); ctx.lineTo(rb.x - 17, rb.y + 15);
+  ctx.moveTo(rb.x + 6, rb.y + 7); ctx.lineTo(rb.x + 18, rb.y + 15);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -871,19 +890,19 @@ function loadSettings() {
   applyMusicVolume();
 }
 function setMusic(v) { settings.music = Math.max(0, Math.min(100, Math.round(v / 5) * 5)); applyMusicVolume(); saveSettings(); }
-function setControl(c) { settings.control = c; stick = null; stickRunning = false; saveSettings(); }
+function setControl(c) { settings.control = c; stick = null; stickRunning = false; sprintHeld = false; sprintPointer = null; saveSettings(); }
 
 function settingsLayout() {
   const c = H() < 480, pw = Math.min(W() - 30, 460), x0 = W() / 2 - pw / 2;
   const titleSize = c ? 26 : 34, titleY = c ? 28 : 44;
   const secY1 = c ? 58 : 96;
   const btnY = secY1 + (c ? 8 : 12), btnH = c ? 36 : 48, bw = (pw - 12) / 2;
-  ctx.font = "13px Arial";
+  ctx.font = H() < 480 ? "12px Arial" : "14px Arial";
   const desc = wrapText(settings.control === "arrows"
-    ? "Botões ▲▼ à esquerda e ◀▶ à direita. Para correr, toque 2 vezes rápido na mesma seta."
-    : "Analógico embaixo, no centro. Para correr, puxe-o um pouco além da metade do limite.", pw);
+    ? "Use as setinhas para se mover. Para correr, pressione a mesma seta 2 vezes rapidamente."
+    : "Mova o analógico à esquerda. Para correr, mantenha o botão com o bonequinho pressionado enquanto move o analógico.", pw - 8);
   const descY = btnY + btnH + (c ? 18 : 24);
-  const secY2 = descY + desc.length * 16 + (c ? 14 : 22);
+  const secY2 = descY + desc.length * (c ? 15 : 18) + (c ? 14 : 22);
   const rowY = secY2 + (c ? 8 : 12), rowH = c ? 36 : 48, sq = rowH;
   const backY = rowY + rowH + (c ? 18 : 28), backH = c ? 34 : 44;
   return {
@@ -906,8 +925,9 @@ function drawSettings() {
   ctx.fillText("MOVIMENTO", W() / 2, L.secY1);
   ctx.fillText("VOLUME DA MÚSICA", W() / 2, L.secY2);
   L.buttons.forEach(drawButton);
-  ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.font = "13px Arial";
-  L.desc.forEach((ln, i) => ctx.fillText(ln, W() / 2, L.descY + i * 16));
+  ctx.fillStyle = "rgba(255,255,255,0.9)"; ctx.font = (H() < 480 ? "12px Arial" : "14px Arial");
+  const descLineH = H() < 480 ? 15 : 18;
+  L.desc.forEach((ln, i) => ctx.fillText(ln, W() / 2, L.descY + i * descLineH));
   const b = L.bar;                                   // barra de volume (0 a 100, de 5 em 5)
   ctx.fillStyle = "rgba(255,255,255,0.1)"; ctx.fillRect(b.x, b.y, b.w, b.h);
   ctx.fillStyle = "rgba(0,229,255,0.55)"; ctx.fillRect(b.x, b.y, b.w * settings.music / 100, b.h);
@@ -1010,7 +1030,7 @@ document.addEventListener("keydown", e => {
   }
 });
 document.addEventListener("keyup", e => releaseKey(e.key.toLowerCase()));
-window.addEventListener("blur", () => { keys.clear(); running = false; });
+window.addEventListener("blur", () => { keys.clear(); running = false; stick = null; sprintHeld = false; sprintPointer = null; });
 
 // ENTRADA: TOQUE / CLIQUE
 canvas.addEventListener("pointerdown", e => {
@@ -1021,8 +1041,15 @@ canvas.addEventListener("pointerdown", e => {
   const b = getButtons().find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
   if (b) { press(b.id); return; }
 
-  // Analógico fixo: só começa se o dedo tocar em cima dele (tocar no meio da tela não faz nada)
+  // Analógico e botão de corrida têm zonas fixas separadas; tocar no meio não cria controles.
   if (analogOn() && screen === "playing" && !gameOver && !paused && e.pointerType !== "mouse") {
+    const rb = sprintBase();
+    if (Math.hypot(x - rb.x, y - rb.y) <= SPRINT_RADIUS + 12) {
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      sprintPointer = e.pointerId; sprintHeld = true;
+      return;
+    }
     const ab = analogBase();
     if (Math.hypot(x - ab.x, y - ab.y) <= STICK_MAX * 1.5) {
       canvas.setPointerCapture(e.pointerId);
@@ -1035,9 +1062,13 @@ canvas.addEventListener("pointermove", e => {
   const r = canvas.getBoundingClientRect();
   stick.x = e.clientX - r.left; stick.y = e.clientY - r.top;
 });
-const endStick = e => { if (stick && e.pointerId === stick.id) stick = null; };
+const endStick = e => {
+  if (stick && e.pointerId === stick.id) stick = null;
+  if (sprintPointer === e.pointerId) { sprintPointer = null; sprintHeld = false; }
+};
 canvas.addEventListener("pointerup", endStick);
 canvas.addEventListener("pointercancel", endStick);
+canvas.addEventListener("lostpointercapture", endStick);
 
 // FEEDBACK
 function hit(good, x, y, pts = 1) {
@@ -1153,12 +1184,12 @@ function movePlayer(dt) {
   // Stamina: correr gasta, descansar recupera; zerada, só volta a correr ao recuperar um pouco
   const st = stickInfo();                                   // analógico (null se solto/zona morta)
   if (exhausted) running = false;
-  const isRunning = (running && keys.size > 0) || (!!st && st.run && !exhausted);
+  const isRunning = (running && keys.size > 0) || (!!st && sprintHeld && !exhausted);
   if (isRunning) { stamina = Math.max(0, stamina - STAMINA_DRAIN * dt); staminaDelay = 0.6; }
   else { staminaDelay -= dt; if (staminaDelay <= 0) stamina = Math.min(STAMINA_MAX, stamina + STAMINA_REGEN * dt); }
   if (stamina <= 0) { exhausted = true; running = false; }
   else if (exhausted && stamina >= STAMINA_RESUME) exhausted = false;
-  stickRunning = !!st && st.run && !exhausted;               // corre só se ainda tiver stamina
+  stickRunning = !!st && sprintHeld && !exhausted;         // corre só segurando o botão e com stamina
 
   let dx = 0, dy = 0;
   const dirs = {
@@ -2147,9 +2178,9 @@ function draw() {
   if (!gameOver && mode !== "boss" && timeLeft > GAME_TIME - 6) {
     ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
     // só a informação necessária para correr, conforme o controle escolhido
-    ctx.fillText(analogOn() ? "Para correr, puxe o analógico um pouco além da metade"
-                            : "Para correr, pressione a mesma " + (isPhone ? "seta" : "tecla") + " 2 vezes rápido",
-                 W() / 2, isPhone ? 100 : H() - 20);
+    const runTip = analogOn() ? "Segure o botão de correr e mova o analógico"
+                              : "Para correr, pressione a mesma " + (isPhone ? "seta" : "tecla") + " 2 vezes rápido";
+    wrapText(runTip, W() - 28).forEach((line, i) => ctx.fillText(line, W() / 2, (isPhone ? 100 : H() - 20) + i * 17));
     ctx.textAlign = "left";
   }
   ctx.shadowBlur = 0;
