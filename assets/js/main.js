@@ -36,11 +36,13 @@ const DB = (() => {
     .slice(0, 10)
     .map(p => ({ name: p.name, value: p[field] }));
 
-  // ---------------- FIREBASE (Firestore sem Authentication/Cloud Functions) ----------------
+  // ---------------- FIREBASE (Firestore + login anônimo: cada nome tem um dono) ----------------
   if (useFirebase) {
     if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
-    const fs = firebase.firestore();
-    const ready = Promise.resolve();
+    const fs = firebase.firestore(), auth = firebase.auth();
+    let uid = null;                                   // identifica o dono de cada nome (login anônimo, invisível para o jogador)
+    const ready = auth.signInAnonymously().then(c => { uid = c.user.uid; });
+    ready.catch(err => console.error("Falha no login anônimo do Firebase (ative Authentication → Anônimo):", err));
     const players = () => fs.collection("players");
     const metaRef = fs.collection("meta").doc("leaderboard");
 
@@ -76,32 +78,34 @@ const DB = (() => {
     return {
       mode: "firebase", keyOf, ready,
 
+      // Nome ocupado = já existe e pertence a OUTRO aparelho (o dono, no mesmo aparelho, pode entrar de novo)
       async isNameTaken(name) {
+        await ready;
         const d = await players().doc(keyOf(name)).get();
-        return d.exists && d.data().name !== name;
+        return d.exists && d.data().uid !== uid;
       },
 
-      // Nome normalizado como ID: o mesmo nome não pode ser cadastrado duas vezes.
+      // O ID do documento é o nome normalizado; o "uid" guarda quem é o dono.
+      // Se o nome já existe e é de outra pessoa, recusa. Duas pessoas nunca ficam com o mesmo nome.
       async claimName(name) {
+        await ready;
         const ref = players().doc(keyOf(name));
         return fs.runTransaction(async t => {
           const d = await t.get(ref);
-          if (d.exists) {
-            return keyOf(d.data().name) === keyOf(name)
-              ? { ok: true, record: pick(d.data()) }
-              : { ok: false, reason: "taken" };
-          }
-          t.set(ref, { name, createdAt: firebase.firestore.FieldValue.serverTimestamp(), easyBest: 0, hardBest: 0, bossBestMs: 0 });
+          if (d.exists) return d.data().uid === uid ? { ok: true, record: pick(d.data()) } : { ok: false, reason: "taken" };
+          t.set(ref, { uid, name, createdAt: firebase.firestore.FieldValue.serverTimestamp(), easyBest: 0, hardBest: 0 });
           return { ok: true, record: pick({}) };
         });
       },
 
       async submit(me, field, value) {
         if (!["easyBest", "hardBest", "bossBestMs"].includes(field) || !(value > 0)) return;
+        await ready;
         const ref = players().doc(keyOf(me.name));
         await fs.runTransaction(async t => {
           const d = await t.get(ref);
           if (!d.exists) throw new Error("Jogador não encontrado no Hall da Fama.");
+          if (d.data().uid !== uid) throw new Error("Esse nome pertence a outro jogador.");   // só o dono grava recordes
           const old = d.data()[field] || 0;
           const better = field === "bossBestMs" ? (!old || value < old) : value > old;
           if (better) t.update(ref, { [field]: value });
@@ -180,7 +184,7 @@ const ctx = canvas.getContext("2d");
 const TOTAL_OBSTACLES = 50;
 const SPEED = 420;
 const GAME_TIME = 120;
-const STICK_MAX = 55;
+const STICK_MAX = 60;       // raio do analógico (limite de puxada)
 const OBSTACLE_GAP = 55;
 const DOUBLE_TAP_MS = 300;
 const SLOW_FACTOR = 0.5;
@@ -213,8 +217,7 @@ let gameOver = false;
 let flash = 0, flashColor = "#fff";
 let last = 0, running = false, stick = null, audio = null;
 let paused = false;
-let controlMode = localStorage.getItem("ctg_control_mode") === "analog" ? "analog" : "arrows";
-let musicVolumePercent = Math.max(0, Math.min(100, Number(localStorage.getItem("ctg_music_volume") ?? 50)));
+let confirmMenu = false;   // pergunta "voltar ao menu?" na pausa (modo clássico)
 let stamina = STAMINA_MAX, exhausted = false, staminaDelay = 0;
 let powerups = [], puTimer = 6, magnetTime = 0, shield = 0;
 let debuff = null, debuffTime = 0, nextDebuffAt = DEBUFF_EVERY, fake = null;
@@ -244,8 +247,6 @@ function overlap(a, b, m = 0) {
   return a.x < b.x + b.size + m && a.x + a.size > b.x - m &&
          a.y < b.y + b.size + m && a.y + a.size > b.y - m;
 }
-
-function pauseButtonZone() { return { x: W()/2 - 22, y: 8, size: 44, gap: 4, fixed: true }; }
 
 function safePosition(size, avoid, margin) {
   let pos;
@@ -319,6 +320,7 @@ function startGame() {
   score = 0; collected = 0; elapsed = 0; invuln = 0; fade = 0;
   timeLeft = GAME_TIME; gameOver = false;
   floats = []; flash = 0; stick = null; running = false; keys.clear(); paused = false;
+  confirmMenu = false; stickRunning = false;
   stamina = STAMINA_MAX; exhausted = false; staminaDelay = 0;
   shake = 0; furyFlash = 0; kb.x = 0; kb.y = 0;   // zera o tremor de tela
   powerups = []; puTimer = 6; magnetTime = 0; shield = 0;
@@ -334,8 +336,8 @@ function startGame() {
   }
 
   const hard = mode === "hard";
-  const p = safePosition(item.size, [player, pauseButtonZone()], 80);
-  item.x = p.x; item.y = p.y;
+  const p = safePosition(item.size, [player, pauseZone()], 80);
+  item.x = p.x; item.y = p.y; keepOffPause(item);
 
   const cfg = obstacleSettings();
   const playerMargin = Math.min(hard ? 130 : 70, Math.min(W(), H()) / 3);
@@ -587,7 +589,11 @@ async function loginClick() {
       else { me = { name, ...r.record }; saveMe(); loginArmed = false; setLoginMsg("", true); screen = "menu"; }
     }
   } catch (e) {
-    loginArmed = false; setLoginMsg("Sem conexão com o servidor. Tente novamente.", false);
+    loginArmed = false;
+    const code = e && e.code ? String(e.code) : "";
+    setLoginMsg(code.includes("operation-not-allowed") || code.includes("admin-restricted") ? "Ative o login Anônimo no Firebase (Authentication)."
+              : code.includes("permission-denied") ? "O Firebase recusou: confira as regras do Firestore."
+              : "Sem conexão com o servidor. Tente novamente.", false);
   }
   loginBusy = false;
 }
@@ -648,31 +654,6 @@ function menuLayout() {
   ] };
 }
 
-function settingsLayout() {
-  const cx = W() / 2, cy = H() / 2, bw = Math.min(190, (W() - 40) / 2), gap = 12;
-  const row1 = cy - 75, row2 = cy + 20;
-  return { buttons: [
-    { id: "settings_arrows", label: (controlMode === "arrows" ? "✓ " : "") + "SETINHAS", font: 18, color: controlMode === "arrows" ? "#4dff88" : "#00ACFF", x: cx - bw - gap/2, y: row1, w: bw, h: 54 },
-    { id: "settings_analog", label: (controlMode === "analog" ? "✓ " : "") + "ANALÓGICO", font: 18, color: controlMode === "analog" ? "#4dff88" : "#00ACFF", x: cx + gap/2, y: row1, w: bw, h: 54 },
-    { id: "vol_down", label: "−", font: 30, color: "#00ACFF", x: cx - 115, y: row2, w: 60, h: 50 },
-    { id: "vol_up", label: "+", font: 30, color: "#00ACFF", x: cx + 55, y: row2, w: 60, h: 50 },
-    { id: "back", label: "VOLTAR", font: 18, outline: true, x: cx - 80, y: cy + 115, w: 160, h: 42 }
-  ] };
-}
-
-function drawSettings() {
-  const cy = H() / 2;
-  drawTitle("CONFIGURAÇÕES", 34, Math.max(42, cy - 145), "#00e5ff");
-  ctx.textAlign = "center"; ctx.fillStyle = "white"; ctx.font = "bold 17px Arial";
-  ctx.fillText("Forma de movimentação", W()/2, cy - 91);
-  settingsLayout().buttons.forEach(drawButton);
-  ctx.fillStyle = "white"; ctx.font = "bold 18px Arial";
-  ctx.fillText("Volume da música: " + musicVolumePercent + "%", W()/2, cy + 5);
-  ctx.font = "13px Arial"; ctx.fillStyle = "rgba(255,255,255,.75)";
-  ctx.fillText("Ajuste de 5 em 5", W()/2, cy + 86);
-  ctx.textAlign = "left";
-}
-
 // ----- HALL DA FAMA -----
 function openHall() {
   screen = "hall"; hallTab = 0; hallState = "loading";
@@ -727,7 +708,7 @@ function drawHall() {
 
   ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,255,255,0.75)"; ctx.font = "12px Arial";
   ctx.fillText(DB.mode === "local" ? "MODO DE TESTE · dados de exemplo salvos só neste aparelho"
-                                   : "O placar atualiza a cada 24h · última: " + fmtDate(hall.updatedAt), W() / 2, L.footY);
+                                   : "Placar ao vivo · atualizado em " + fmtDate(hall.updatedAt), W() / 2, L.footY);
   if (me) ctx.fillText("Seus recordes: Fácil " + (me.easyBest || 0) + " · Difícil " + (me.hardBest || 0) +
                        " · Boss " + (me.bossBestMs ? fmtRun(me.bossBestMs) : "--"), W() / 2, L.footY + 16);
   ctx.textAlign = "left";
@@ -764,6 +745,7 @@ function getButtons() {
     );
     return list;
   }
+  if (screen === "playing" && paused && confirmMenu) return confirmLayout().buttons;
   if (screen === "playing" && paused)
     return [
       { id: "resume", label: "CONTINUAR", font: 22, x: cx - 115, y: cy - 20, w: 230, h: 60 },
@@ -774,61 +756,14 @@ function getButtons() {
   return [];
 }
 
-// Confirma antes de abandonar uma partida em andamento.
-// No Clássico, informa os pontos acumulados que serão perdidos ao sair.
-// No modo BOSS, deixa claro que sair não concede recompensa nem recorde de conclusão.
-function confirmReturnToMenu() {
-  if (screen !== "playing" || gameOver) {
-    screen = "menu";
-    paused = false;
-    keys.clear(); running = false; stick = null;
-    return;
-  }
-
-  let message;
-  if (mode === "boss") {
-    message = "ATENÇÃO!\n\nSe você voltar ao menu agora, receberá NADA desta partida.\n\nTem certeza de que deseja voltar ao menu?";
-  } else {
-    message = "Você acumulou " + score + " ponto" + (score === 1 ? "" : "s") +
-      " nesta partida.\n\nSe voltar ao menu agora, esses pontos não serão contabilizados no Hall da Fama.\n\nDeseja mesmo voltar ao menu?";
-  }
-
-
-if (window.confirm(message)) {
-  // No modo Clássico, registra os pontos desta partida
-  // como recorde, sem somar com partidas anteriores.
-  if (mode === "easy" || mode === "hard") {
-    const field = mode === "easy" ? "easyBest" : "hardBest";
-
-    if (score > 0 && score > bestScore) {
-      bestScore = score;
-      saveBest();
-
-      if (DB && typeof DB.submit === "function") {
-        DB.submit({ name: playerName }, field, score)
-          .catch(err => console.error("Erro ao salvar recorde:", err));
-      }
-    }
-  }
-
-  screen = "menu";
-  paused = false;
-  gameOver = false;
-  keys.clear();
-  running = false;
-  stick = null;
-}
-
-}
-
 function press(id) {
   if (id === "play") screen = "modes";
   else if (id === "hall") openHall();
   else if (id === "settings") screen = "settings";
-  else if (id === "settings_arrows") { controlMode = "arrows"; localStorage.setItem("ctg_control_mode", controlMode); }
-  else if (id === "settings_analog") { controlMode = "analog"; localStorage.setItem("ctg_control_mode", controlMode); }
-  else if (id === "vol_down") setMusicVolume(musicVolumePercent - 5);
-  else if (id === "vol_up") setMusicVolume(musicVolumePercent + 5);
+  else if (id === "ctlArrows") setControl("arrows");
+  else if (id === "ctlAnalog") setControl("analog");
+  else if (id === "volDown") setMusic(settings.music - 5);
+  else if (id === "volUp") setMusic(settings.music + 5);
   else if (id.startsWith("tab")) hallTab = +id.slice(3);
   else if (id === "loginOk") loginClick();
   else if (id === "classic") screen = "difficulty";
@@ -852,11 +787,16 @@ function press(id) {
   else if (id === "again") startGame();
   else if (id === "pause") pauseGame();
   else if (id === "resume") paused = false;
-  else if (id === "menu") confirmReturnToMenu();
+  else if (id === "menu") {
+    if (screen === "playing" && paused && !gameOver && (mode === "boss" || score > 0)) { confirmMenu = true; return; }   // pede confirmação
+    screen = "menu"; paused = false;
+  }
+  else if (id === "menuYes") { confirmMenu = false; screen = "menu"; paused = false; }
+  else if (id === "menuNo") confirmMenu = false;
 }
 
 function pauseGame() {
-  paused = true; keys.clear(); running = false; stick = null;
+  paused = true; confirmMenu = false; keys.clear(); running = false; stick = null;
 }
 
 // Pressionar / soltar uma direção (teclado e botões de toque usam o mesmo código)
@@ -873,6 +813,138 @@ function holdKey(k, repeat) {
 function releaseKey(k) {
   keys.delete(k);
   if (keys.size === 0) running = false;   // só para de correr sem nenhuma tecla pressionada
+}
+
+// ===== ANALÓGICO (fixo, embaixo no centro da tela) =====
+let isPhone = false;          // atualizado em updateTouchControls()
+let stickRunning = false;     // true enquanto o analógico está puxado além da metade (corrida)
+const STICK_RUN_AT = 0.5;     // até 50% do limite = anda | acima de 50% = corre
+const analogOn = () => settings.control === "analog" && isPhone;
+const analogBase = () => ({ x: W() / 2, y: H() - STICK_MAX - 44 });
+
+// Direção do analógico (vetor unitário) e se está na faixa de corrida.
+// A velocidade NÃO muda com a puxada: só existem "andar" e "correr", iguais às das setinhas.
+function stickInfo() {
+  if (!stick) return null;
+  const b = analogBase(), vx = stick.x - b.x, vy = stick.y - b.y, len = Math.hypot(vx, vy);
+  if (len < 6) return null;                                   // zona morta
+  return { ux: vx / len, uy: vy / len, run: len / STICK_MAX > STICK_RUN_AT };
+}
+
+function drawAnalog() {
+  if (!analogOn() || screen !== "playing" || gameOver || paused) return;
+  const b = analogBase();
+  let kx = b.x, ky = b.y;
+  if (stick) {
+    const vx = stick.x - b.x, vy = stick.y - b.y, len = Math.hypot(vx, vy) || 1, k = Math.min(len, STICK_MAX) / len;
+    kx = b.x + vx * k; ky = b.y + vy * k;
+  }
+  ctx.save();
+  if (stick && stickRunning) { ctx.shadowColor = "rgba(255,255,255,0.3)"; ctx.shadowBlur = 28; }   // aura branca fraquinha (30%) ao correr
+  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(b.x, b.y, STICK_MAX, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
+  ctx.beginPath(); ctx.arc(b.x, b.y, 22, 0, Math.PI * 2); ctx.fill();                              // centro (repouso)
+  ctx.fillStyle = "rgba(255,255,0,0.6)";
+  ctx.beginPath(); ctx.arc(kx, ky, 22, 0, Math.PI * 2); ctx.fill();                                // bolinha
+  ctx.restore();
+}
+
+// ===== CONFIGURAÇÕES =====
+const SETTINGS_KEY = "cybertech_settings";
+const settings = { control: "arrows", music: 50 };   // control: "arrows" (setinhas) | "analog" (analógico); music: 0 a 100 (de 5 em 5)
+
+function applyMusicVolume() { bgm.volume = settings.music / 100; }
+function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
+function loadSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null");
+    if (s) {
+      if (s.control === "arrows" || s.control === "analog") settings.control = s.control;
+      if (Number.isFinite(s.music)) settings.music = Math.max(0, Math.min(100, Math.round(s.music / 5) * 5));
+    } else {   // aproveita o que já estava salvo pela versão anterior (ctg_control_mode / ctg_music_volume)
+      const c = localStorage.getItem("ctg_control_mode"), m = localStorage.getItem("ctg_music_volume");
+      if (c === "arrows" || c === "analog") settings.control = c;
+      if (m !== null && Number.isFinite(Number(m))) settings.music = Math.max(0, Math.min(100, Math.round(Number(m) / 5) * 5));
+    }
+  } catch (e) {}
+  applyMusicVolume();
+}
+function setMusic(v) { settings.music = Math.max(0, Math.min(100, Math.round(v / 5) * 5)); applyMusicVolume(); saveSettings(); }
+function setControl(c) { settings.control = c; stick = null; stickRunning = false; saveSettings(); }
+
+function settingsLayout() {
+  const c = H() < 480, pw = Math.min(W() - 30, 460), x0 = W() / 2 - pw / 2;
+  const titleSize = c ? 26 : 34, titleY = c ? 28 : 44;
+  const secY1 = c ? 58 : 96;
+  const btnY = secY1 + (c ? 8 : 12), btnH = c ? 36 : 48, bw = (pw - 12) / 2;
+  ctx.font = "13px Arial";
+  const desc = wrapText(settings.control === "arrows"
+    ? "Botões ▲▼ à esquerda e ◀▶ à direita. Para correr, toque 2 vezes rápido na mesma seta."
+    : "Analógico embaixo, no centro. Para correr, puxe-o um pouco além da metade do limite.", pw);
+  const descY = btnY + btnH + (c ? 18 : 24);
+  const secY2 = descY + desc.length * 16 + (c ? 14 : 22);
+  const rowY = secY2 + (c ? 8 : 12), rowH = c ? 36 : 48, sq = rowH;
+  const backY = rowY + rowH + (c ? 18 : 28), backH = c ? 34 : 44;
+  return {
+    titleSize, titleY, secY1, secY2, descY, desc, pw, x0, rowY, rowH,
+    bar: { x: x0 + sq + 10, y: rowY, w: pw - 2 * sq - 20, h: rowH },
+    buttons: [
+      { id: "ctlArrows", label: "SETINHAS", font: c ? 15 : 18, outline: settings.control !== "arrows", x: x0, y: btnY, w: bw, h: btnH },
+      { id: "ctlAnalog", label: "ANALÓGICO", font: c ? 15 : 18, outline: settings.control !== "analog", x: x0 + bw + 12, y: btnY, w: bw, h: btnH },
+      { id: "volDown", label: "−", font: 30, color: settings.music <= 0 ? "#555" : "yellow", x: x0, y: rowY, w: sq, h: rowH },
+      { id: "volUp", label: "+", font: 30, color: settings.music >= 100 ? "#555" : "yellow", x: x0 + pw - sq, y: rowY, w: sq, h: rowH },
+      { id: "back", label: "VOLTAR", font: 18, outline: true, x: W() / 2 - 80, y: backY, w: 160, h: backH }
+    ]
+  };
+}
+
+function drawSettings() {
+  const L = settingsLayout();
+  drawTitle("CONFIGURAÇÕES", L.titleSize, L.titleY, "yellow");
+  ctx.textAlign = "center"; ctx.fillStyle = "#00e5ff"; ctx.font = "bold 15px Arial";
+  ctx.fillText("MOVIMENTO", W() / 2, L.secY1);
+  ctx.fillText("VOLUME DA MÚSICA", W() / 2, L.secY2);
+  L.buttons.forEach(drawButton);
+  ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.font = "13px Arial";
+  L.desc.forEach((ln, i) => ctx.fillText(ln, W() / 2, L.descY + i * 16));
+  const b = L.bar;                                   // barra de volume (0 a 100, de 5 em 5)
+  ctx.fillStyle = "rgba(255,255,255,0.1)"; ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.fillStyle = "rgba(0,229,255,0.55)"; ctx.fillRect(b.x, b.y, b.w * settings.music / 100, b.h);
+  ctx.strokeStyle = "yellow"; ctx.lineWidth = 3; ctx.strokeRect(b.x + 1.5, b.y + 1.5, b.w - 3, b.h - 3);
+  ctx.fillStyle = "white"; ctx.font = "bold 22px Arial";
+  ctx.fillText(settings.music + "%", b.x + b.w / 2, b.y + b.h / 2 + 8);
+  ctx.textAlign = "left";
+}
+
+// ===== CONFIRMAÇÃO: voltar ao menu pela pausa (modo clássico) =====
+function confirmLayout() {
+  const w = Math.min(W() - 30, 460), bw = Math.min(300, W() - 40);
+  ctx.font = "16px Arial";
+  const lines = wrapText(mode === "boss"
+    ? "Se voltar ao menu agora, você não receberá nada desta partida."
+    : "Se voltar ao menu agora, a partida será encerrada e esses pontos não serão salvos.", w - 20);
+  const top = Math.max(10, H() / 2 - 150), msgY = top + 112;
+  const btnY = msgY + lines.length * 22 + 10;
+  return {
+    lines, titleY: top + 36, ptsY: top + 80, msgY,
+    buttons: [
+      { id: "menuYes", label: "SIM, VOLTAR AO MENU", font: 19, color: "#ff5a5a", x: W() / 2 - bw / 2, y: btnY, w: bw, h: 52 },
+      { id: "menuNo", label: "CONTINUAR JOGANDO", font: 19, x: W() / 2 - bw / 2, y: btnY + 62, w: bw, h: 52 }
+    ]
+  };
+}
+
+function drawConfirmMenu() {
+  const L = confirmLayout();
+  drawTitle("VOLTAR AO MENU?", 32, L.titleY, "yellow");
+  ctx.textAlign = "center"; ctx.font = "bold 26px Arial";
+  if (mode === "boss") { ctx.fillStyle = "#ff5a5a"; ctx.fillText("ATENÇÃO!", W() / 2, L.ptsY); }
+  else { ctx.fillStyle = "#00e5ff"; ctx.fillText("Você fez " + (score === 1 ? "1 ponto" : score + " pontos") + " até agora", W() / 2, L.ptsY); }
+  ctx.fillStyle = "white"; ctx.font = "16px Arial";
+  L.lines.forEach((ln, i) => ctx.fillText(ln, W() / 2, L.msgY + i * 22));
+  ctx.textAlign = "left";
+  L.buttons.forEach(drawButton);
 }
 
 // CONTROLES DE TOQUE (esquerda: cima/baixo | direita: esquerda/direita)
@@ -900,7 +972,8 @@ touchControls.querySelectorAll(".ctrl-btn").forEach(btn => {
 function updateTouchControls() {
   const isCellphone = /Android.*Mobile|iPhone|iPod|Windows Phone|Mobile/i.test(navigator.userAgent) &&
                       matchMedia("(pointer: coarse)").matches;
-  const show = screen === "playing" && !gameOver && !paused && isCellphone && controlMode === "arrows";
+  isPhone = isCellphone;
+  const show = screen === "playing" && !gameOver && !paused && isCellphone && settings.control === "arrows";
   if (show === touchShown) return;
   touchShown = show;
   touchControls.classList.toggle("controls-on", show);
@@ -915,11 +988,16 @@ document.addEventListener("keydown", e => {
 
   // Pausar / continuar com P ou Esc (Enter/Espaço também continuam)
   if (screen === "playing" && !gameOver) {
+    if (paused && confirmMenu) {                       // na pergunta: Esc/P voltam à pausa; Enter não confirma por engano
+      if (k === "p" || k === "escape") confirmMenu = false;
+      e.preventDefault(); return;
+    }
     if (!paused && (k === "p" || k === "escape")) { pauseGame(); e.preventDefault(); return; }
     if (paused && (k === "p" || k === "escape" || confirm)) { paused = false; e.preventDefault(); return; }
   }
 
   if ((screen === "rewards" || screen === "modes" || screen === "difficulty" || screen === "hall" || screen === "settings") && k === "escape") { screen = "menu"; return; }
+  if (screen === "settings" && (k === "arrowleft" || k === "arrowright")) { setMusic(settings.music + (k === "arrowright" ? 5 : -5)); e.preventDefault(); return; }
   if (screen === "menu" && confirm) { screen = "modes"; e.preventDefault(); return; }
   if (screen === "modes" && (k === "1" || k === "2")) { press(k === "1" ? "classic" : "boss"); return; }
   if (screen === "difficulty" && (k === "1" || k === "2")) { press(k === "1" ? "easy" : "hard"); return; }
@@ -943,16 +1021,13 @@ canvas.addEventListener("pointerdown", e => {
   const b = getButtons().find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
   if (b) { press(b.id); return; }
 
-  if (screen === "playing" && !gameOver && !paused && e.pointerType !== "mouse" && controlMode === "analog") {
-    // O analógico fica fixo na parte inferior central da tela.
-    const ox = W() / 2, oy = H() - Math.max(82, H() * 0.14);
-    if (Math.hypot(x - ox, y - oy) > STICK_MAX * 2.2) return;
-    canvas.setPointerCapture(e.pointerId);
-    stick = { id: e.pointerId, ox, oy, x, y };
-  } else if (screen === "playing" && !gameOver && !paused && e.pointerType !== "mouse" && controlMode === "arrows") {
-    // Mantém o controle por arrasto disponível em dispositivos com ponteiro de toque.
-    canvas.setPointerCapture(e.pointerId);
-    stick = { id: e.pointerId, ox: x, oy: y, x, y };
+  // Analógico fixo: só começa se o dedo tocar em cima dele (tocar no meio da tela não faz nada)
+  if (analogOn() && screen === "playing" && !gameOver && !paused && e.pointerType !== "mouse") {
+    const ab = analogBase();
+    if (Math.hypot(x - ab.x, y - ab.y) <= STICK_MAX * 1.5) {
+      canvas.setPointerCapture(e.pointerId);
+      stick = { id: e.pointerId, x, y };
+    }
   }
 });
 canvas.addEventListener("pointermove", e => {
@@ -978,17 +1053,24 @@ const proxyZone = o => ({ x: o.x, y: o.y, size: o.size, gap: 0, fixed: true });
 // Zonas dos power-ups (gap 0: brancos não nascem em cima, mas podem ficar ao lado)
 function powerupZones() { return powerups.map(proxyZone); }
 
+// Área do botão de pausa (topo, no centro): nenhum bloco vermelho/power-up nasce aí
+function pauseZone() { return { x: W() / 2 - 22, y: 8, size: 44, gap: 14, fixed: true }; }
+function keepOffPause(o) {
+  const z = pauseZone();
+  if (overlap(o, z, z.gap)) o.y = z.y + z.size + z.gap + 2;   // garantia extra: empurra para baixo da faixa
+}
+
 function freeAvoid(skip) {
   return [
+    pauseZone(),
     { x: player.x, y: player.y, size: player.size, gap: 20, fixed: true },
-    ...(screen === "playing" && mode !== "boss" ? [pauseButtonZone()] : []),
     ...obstacles.map(proxyZone), ...powerupZones(), proxyZone(item),
     ...(fake && fake !== skip ? [proxyZone(fake)] : [])
   ];
 }
 function placeItem(o) {
   const p = safePosition(o.size, freeAvoid(o), 0);
-  o.x = p.x; o.y = p.y;
+  o.x = p.x; o.y = p.y; keepOffPause(o);
 }
 
 // Mímico: nasce perto do bloco verdadeiro (40 a 90 px de distância entre os centros)
@@ -1069,13 +1151,14 @@ function resolveKnightWall(oldY) {
 // Movimento do jogador (teclado, botões de toque e joystick)
 function movePlayer(dt) {
   // Stamina: correr gasta, descansar recupera; zerada, só volta a correr ao recuperar um pouco
+  const st = stickInfo();                                   // analógico (null se solto/zona morta)
   if (exhausted) running = false;
-  const stickMoving = !!(stick && Math.hypot(stick.x - stick.ox, stick.y - stick.oy) > 8);
-  const movingInput = keys.size > 0 || stickMoving;
-  if (running && movingInput) { stamina = Math.max(0, stamina - STAMINA_DRAIN * dt); staminaDelay = 0.6; }
+  const isRunning = (running && keys.size > 0) || (!!st && st.run && !exhausted);
+  if (isRunning) { stamina = Math.max(0, stamina - STAMINA_DRAIN * dt); staminaDelay = 0.6; }
   else { staminaDelay -= dt; if (staminaDelay <= 0) stamina = Math.min(STAMINA_MAX, stamina + STAMINA_REGEN * dt); }
   if (stamina <= 0) { exhausted = true; running = false; }
   else if (exhausted && stamina >= STAMINA_RESUME) exhausted = false;
+  stickRunning = !!st && st.run && !exhausted;               // corre só se ainda tiver stamina
 
   let dx = 0, dy = 0;
   const dirs = {
@@ -1087,16 +1170,9 @@ function movePlayer(dt) {
     dx += dirs[k][0] * f; dy += dirs[k][1] * f;
   });
 
-  if (controlMode === "analog" && screen === "playing" && !gameOver && !paused && !touchShown) {
-    const bx = W()/2, by = H() - Math.max(82, H()*0.14);
-    ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(bx, by, STICK_MAX, 0, Math.PI*2); ctx.stroke();
-    ctx.fillStyle = "rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(bx, by, 22, 0, Math.PI*2); ctx.fill();
-  }
-  if (stick) {
-    const vx = stick.x - stick.ox, vy = stick.y - stick.oy;
-    const len = Math.hypot(vx, vy);
-    if (len > 8) { dx += vx / Math.max(len, STICK_MAX); dy += vy / Math.max(len, STICK_MAX); }
+  if (st) {                                                  // 0–50% da puxada = anda | 51–100% = corre (velocidade fixa)
+    const f = stickRunning ? 1 : SLOW_FACTOR;
+    dx += st.ux * f; dy += st.uy * f;
   }
 
   if (debuff === "invert") { dx = -dx; dy = -dy; }   // teclas (e joystick) inversos
@@ -2017,7 +2093,7 @@ function draw() {
   ctx.globalAlpha = fade > 0 ? 0.15 + 0.85 * (1 - fade / FADE_TIME) : 1;
   ctx.fillStyle = flash > 0 ? flashColor : "yellow";
   ctx.fillRect(player.x, player.y, player.size, player.size);
-  if (running && keys.size > 0) {
+  if ((running && keys.size > 0) || stickRunning) {
     ctx.strokeStyle = "white"; ctx.lineWidth = 3;
     ctx.strokeRect(player.x, player.y, player.size, player.size);
   }
@@ -2043,21 +2119,7 @@ function draw() {
   });
   ctx.globalAlpha = 1;
 
-  if (controlMode === "analog" && screen === "playing" && !gameOver && !paused && !touchShown) {
-    const bx = W()/2, by = H() - Math.max(82, H()*0.14);
-    ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(bx, by, STICK_MAX, 0, Math.PI*2); ctx.stroke();
-    ctx.fillStyle = "rgba(255,255,255,0.12)"; ctx.beginPath(); ctx.arc(bx, by, 22, 0, Math.PI*2); ctx.fill();
-  }
-  if (stick) {
-    const vx = stick.x - stick.ox, vy = stick.y - stick.oy;
-    const len = Math.hypot(vx, vy) || 1;
-    const k = Math.min(len, STICK_MAX) / len;
-    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(stick.ox, stick.oy, STICK_MAX, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = "rgba(255,255,0,0.6)";
-    ctx.beginPath(); ctx.arc(stick.ox + vx * k, stick.oy + vy * k, 22, 0, Math.PI * 2); ctx.fill();
-  }
+  drawAnalog();
 
   // HUD
   ctx.shadowColor = "black"; ctx.shadowBlur = 5;
@@ -2084,9 +2146,10 @@ function draw() {
 
   if (!gameOver && mode !== "boss" && timeLeft > GAME_TIME - 6) {
     ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
-    ctx.fillText(touchShown ? "Use os botões (toque 2x rápido para correr)"
-                            : "WASD / setas (toque 2x rápido para correr) ou arraste o dedo",
-                 W() / 2, touchShown ? 100 : H() - 20);
+    // só a informação necessária para correr, conforme o controle escolhido
+    ctx.fillText(analogOn() ? "Para correr, puxe o analógico um pouco além da metade"
+                            : "Para correr, pressione a mesma " + (isPhone ? "seta" : "tecla") + " 2 vezes rápido",
+                 W() / 2, isPhone ? 100 : H() - 20);
     ctx.textAlign = "left";
   }
   ctx.shadowBlur = 0;
@@ -2117,11 +2180,14 @@ function draw() {
   if (paused) {
     ctx.fillStyle = "rgba(0,0,0,0.75)";
     ctx.fillRect(0, 0, W(), H());
-    drawTitle("PAUSADO", 45, cy - 60, "yellow");
-    getButtons().forEach(drawButton);
-    ctx.fillStyle = "white"; ctx.font = "14px Arial"; ctx.textAlign = "center";
-    ctx.fillText("P / Esc / Enter para continuar", W() / 2, cy + 130);
-    ctx.textAlign = "left";
+    if (confirmMenu) drawConfirmMenu();
+    else {
+      drawTitle("PAUSADO", 45, cy - 60, "yellow");
+      getButtons().forEach(drawButton);
+      ctx.fillStyle = "white"; ctx.font = "14px Arial"; ctx.textAlign = "center";
+      ctx.fillText("P / Esc / Enter para continuar", W() / 2, cy + 130);
+      ctx.textAlign = "left";
+    }
   }
 }
 
@@ -2143,15 +2209,10 @@ function loop(ts) {
 }
 
 // ===== MÚSICA DE FUNDO =====
-const MUSIC_VOLUME = 0.5;   // volume inicial padrão
+const MUSIC_VOLUME = 0.5;   // 50% do volume do aparelho da pessoa
 const bgm = new Audio("assets/audio/cyberpunk-suspense.mp3");
-function setMusicVolume(value) {
-  musicVolumePercent = Math.max(0, Math.min(100, Math.round(value / 5) * 5));
-  localStorage.setItem("ctg_music_volume", String(musicVolumePercent));
-  if (typeof bgm !== "undefined") bgm.volume = musicVolumePercent / 100;
-}
 bgm.loop = true;            // repete sem parar
-bgm.volume = musicVolumePercent / 100;
+bgm.volume = MUSIC_VOLUME;
 bgm.preload = "auto";
 
 let musicStarted = false;
@@ -2173,6 +2234,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) bgm.pause(); else bgm.play().catch(() => {});
 });
 
+loadSettings();   // controle escolhido e volume da música
 loadMe();
 if (!me) screen = "login";   // primeira vez: pede o nome de usuário
 syncMe();
