@@ -668,6 +668,8 @@ let auraEffectActive = false;
 function playAuraEffect() {
   if (auraEffectActive) return;
   auraEffectActive = true;
+  // Silencia a música de fundo durante a gravação e a phonk.
+  bgm.pause();
   auraPhonk.pause();
   auraPhonk.currentTime = 0;
   auraVoice.pause();
@@ -675,7 +677,15 @@ function playAuraEffect() {
   const startPhonk = () => {
     if (!auraEffectActive) return;
     auraPhonk.currentTime = 0;
-    auraPhonk.play().catch(() => {});
+    auraPhonk.play().catch(() => {
+      auraEffectActive = false;
+      if (musicStarted && !document.hidden) bgm.play().catch(() => {});
+    });
+  };
+  auraPhonk.onended = () => {
+    if (!auraEffectActive) return;
+    auraEffectActive = false;
+    if (musicStarted && !document.hidden) bgm.play().catch(() => {});
   };
   auraVoice.onended = startPhonk;
   auraVoice.onerror = startPhonk;
@@ -688,6 +698,7 @@ function stopAuraEffect() {
   auraVoice.currentTime = 0;
   auraPhonk.pause();
   auraPhonk.currentTime = 0;
+  if (musicStarted && !document.hidden) bgm.play().catch(() => {});
 }
 nameInput.addEventListener("input", () => {
   const clean = sanitizeName(nameInput.value);
