@@ -1891,10 +1891,15 @@ function drawHazards() {
     const scaleAlong = 180 / 130;
     const scaleAcross = visualCollisionSize / 44;
     ctx.save();
-    ctx.translate(h.pos, h.lane);
+    // FIX KNIGHT: centralizar a transformação no eixo correto para cada direção.
+    // Horizontal: centro (pos, lane). Vertical: centro (lane, pos).
+    // Assim a escala não desloca o cavalo vertical nem cria aparência diagonal.
+    const horseCenterX = h.dir === "h" ? h.pos : h.lane;
+    const horseCenterY = h.dir === "h" ? h.lane : h.pos;
+    ctx.translate(horseCenterX, horseCenterY);
     ctx.scale(h.dir === "h" ? scaleAlong : scaleAcross,
               h.dir === "h" ? scaleAcross : scaleAlong);
-    ctx.translate(-h.pos, -h.lane);
+    ctx.translate(-horseCenterX, -horseCenterY);
     const tl = 130;                                    // rastro de luz
     ctx.fillStyle = "rgba(0,229,255,0.22)";
     if (h.dir === "h") ctx.fillRect(h.side > 0 ? h.pos - 40 - tl : h.pos + 40, h.lane - 12, tl, 24);
@@ -2450,8 +2455,16 @@ function draw() {
   // HUD
   ctx.shadowColor = "black"; ctx.shadowBlur = 5;
   ctx.fillStyle = "white";
-  ctx.font = "bold 22px 'Arial Black', Arial, sans-serif";
-  ctx.fillText("Pontuação: " + score, 15, 30);
+  // HUD responsivo: diminui a pontuação em telas estreitas e quando o número cresce.
+  const scoreLabel = "Pontuação: " + score;
+  const scoreMaxWidth = Math.max(70, W() * 0.39);
+  let scoreFontSize = Math.min(22, Math.max(10, W() * 0.032));
+  ctx.font = "bold " + scoreFontSize + "px 'Arial Black', Arial, sans-serif";
+  while (ctx.measureText(scoreLabel).width > scoreMaxWidth && scoreFontSize > 10) {
+    scoreFontSize -= 1;
+    ctx.font = "bold " + scoreFontSize + "px 'Arial Black', Arial, sans-serif";
+  }
+  ctx.fillText(scoreLabel, 15, 30);
   ctx.font = "bold 14px Arial";
   if (mode !== "boss") ctx.fillText(mode === "easy"
     ? "Troca de blocos: " + (collected % ITEMS_PER_SHUFFLE) + "/" + ITEMS_PER_SHUFFLE
