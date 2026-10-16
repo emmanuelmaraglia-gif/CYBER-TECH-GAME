@@ -590,6 +590,24 @@ function forbiddenNameCombinationKind(name) {
   const normalized = normalizeNumberWords(name);
   const tokens = normalized ? normalized.split(/\s+/) : [];
   const compact = normalized.replace(/\s+/g, "");
+  // Lista explícita de formas coladas: evita que nomes como "sixseven" escapem
+  // do filtro por diferenças de normalização, espaços ou pontuação.
+  const joinedForbidden = new Set([
+    "sixseven", "sevensix", "six7", "7six", "67", "76",
+    "sixtyseven", "seventysixty", "sessentaesete", "seteesessenta",
+    "sessentaesete", "sesentaysiete", "sieteysesenta", "soixantesept",
+    "septsoixante", "sessantaesette", "settesessanta", "sechzigsieben",
+    "siebensechzig", "zestigzeven", "zevenzestig",
+    "fortytwo", "twoforty", "quarentaedois", "doisequarenta",
+    "cuarentaydos", "dosycuarenta", "quarantadue", "duequaranta",
+    "sixtyone", "onesixty", "sessentaeum", "umsessenta",
+    "sesentayuno", "unoysesenta", "soixanteetun", "unsoixante"
+  ]);
+  if (joinedForbidden.has(compact)) {
+    if (["sixseven", "sevensix", "six7", "7six", "67", "76", "sixtyseven", "seventysixty", "sessentaesete", "seteesessenta", "sesentaysiete", "sieteysesenta", "soixantesept", "septsoixante", "sessantaesette", "settesessanta", "sechzigsieben", "siebensechzig", "zestigzeven", "zevenzestig"].includes(compact)) return "67";
+    if (["fortytwo", "twoforty", "quarentaedois", "doisequarenta", "cuarentaydos", "dosycuarenta", "quarantadue", "duequaranta"].includes(compact)) return "42";
+    if (["sixtyone", "onesixty", "sessentaeum", "umsessenta", "sesentayuno", "unoysesenta", "soixanteetun", "unsoixante"].includes(compact)) return "61";
+  }
   const hasDigit6 = /6/.test(name), hasDigit7 = /7/.test(name);
   const hasDigit4 = /4/.test(name), hasDigit2 = /2/.test(name), hasDigit1 = /1/.test(name);
   if (hasDigit6 && hasDigit7) return "67";
@@ -604,6 +622,20 @@ function forbiddenNameCombinationKind(name) {
   if (hasAnyNumberWord(tokens, sixWords) && hasAnyNumberWord(tokens, sevenWords)) return "67";
   if (hasAnyNumberWord(tokens, fourWords) && hasAnyNumberWord(tokens, twoWords)) return "42";
   if (hasAnyNumberWord(tokens, sixWords) && hasAnyNumberWord(tokens, oneWords)) return "61";
+
+  // Também reconhece palavras coladas, como "sixseven", sem espaço ou hífen.
+  // Exige pelo menos 3 letras em cada parte para reduzir falsos positivos.
+  const hasJoinedPair = (leftForms, rightForms) => leftForms.some(left => {
+    const a = normalizeNumberWords(left).replace(/\s+/g, "");
+    if (a.length < 3) return false;
+    return rightForms.some(right => {
+      const b = normalizeNumberWords(right).replace(/\s+/g, "");
+      return b.length >= 3 && (compact.includes(a + b) || compact.includes(b + a));
+    });
+  });
+  if (hasJoinedPair(sixWords, sevenWords)) return "67";
+  if (hasJoinedPair(fourWords, twoWords)) return "42";
+  if (hasJoinedPair(sixWords, oneWords)) return "61";
 
   // Formas compostas e traduções frequentes das dezenas, com ou sem espaços/pontuação.
   const compactForms = forms => forms.some(form => compact.includes(normalizeNumberWords(form).replace(/\s+/g, "")));
