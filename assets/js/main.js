@@ -2023,7 +2023,7 @@ function drawKnight(b) {
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, b.alpha));
   if (b.state === "swing") {                           // marca neon da brecha por onde dá para passar
-    const gw = b.fury ? 60 : 100;
+    const gw = b.fury ? 80 : 100; // Deve corresponder exatamente a bands[].gapW (normal: 100, fúria: 80).
     neon("#4dff88", 10); ctx.strokeStyle = "rgba(77,255,136," + (0.5 + 0.5 * Math.sin(performance.now() / 80)) + ")"; ctx.lineWidth = 4;
     [b.gapX, b.gapX + gw].forEach(gx => { ctx.beginPath(); ctx.moveTo(gx, b.y + b.size); ctx.lineTo(gx, H()); ctx.stroke(); });
     noNeon();
