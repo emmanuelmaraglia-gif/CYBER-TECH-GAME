@@ -351,7 +351,7 @@ function startGame() {
   item.x = p.x; item.y = p.y; keepOffPause(item);
 
   const cfg = obstacleSettings();
-  const playerMargin = Math.min(hard ? 130 : 70, Math.min(W(), H()) / 3);
+  const playerMargin = Math.min(hard ? 65 : 70, Math.min(W(), H()) / 3);
   obstacles = [];
   for (let i = 0; i < cfg.count; i++) {
     const o = { size: 25, gap: cfg.gap };
@@ -1032,17 +1032,19 @@ function drawAnalog() {
   ctx.beginPath(); ctx.arc(b.x, b.y, 22, 0, Math.PI * 2); ctx.fill();                              // centro (repouso)
   ctx.fillStyle = "rgba(255,255,0,0.6)";
   ctx.beginPath(); ctx.arc(kx, ky, 22, 0, Math.PI * 2); ctx.fill();                                // bolinha
-  // Botão de corrida à direita: usa o ícone fornecido pelo usuário, com 30% de opacidade.
+  // Botão de corrida: fica visualmente indisponível durante LENTIDÃO no clássico difícil.
   const rb = sprintBase();
+  const sprintDisabled = mode === "hard" && debuff === "slow";
   ctx.save();
-  ctx.globalAlpha = 0.3; // mantém o botão e o ícone de correr com 30% de opacidade
-  ctx.shadowColor = sprintHeld ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.35)";
-  ctx.shadowBlur = sprintHeld ? 14 : 6;
-  ctx.fillStyle = sprintHeld ? "rgba(0,190,255,0.98)" : "rgba(0,160,255,0.86)";
+  ctx.globalAlpha = sprintDisabled ? 0.12 : 0.3;
+  ctx.shadowColor = sprintHeld && !sprintDisabled ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.35)";
+  ctx.shadowBlur = sprintHeld && !sprintDisabled ? 14 : 6;
+  ctx.fillStyle = sprintDisabled ? "rgba(120,120,120,0.7)" : (sprintHeld ? "rgba(0,190,255,0.98)" : "rgba(0,160,255,0.86)");
   ctx.beginPath(); ctx.arc(rb.x, rb.y, SPRINT_RADIUS, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = 0;
   if (runnerIcon.complete && runnerIcon.naturalWidth) {
     const iconSize = 52;
+    ctx.globalAlpha = sprintDisabled ? 0.15 : 1;
     ctx.drawImage(runnerIcon, rb.x - iconSize / 2, rb.y - iconSize / 2, iconSize, iconSize);
   }
   ctx.restore(); // restaura a opacidade dos demais controles
@@ -1232,6 +1234,7 @@ canvas.addEventListener("pointerdown", e => {
     const rb = sprintBase();
     if (Math.hypot(x - rb.x, y - rb.y) <= SPRINT_RADIUS + 12) {
       e.preventDefault();
+      if (mode === "hard" && debuff === "slow") { sprintHeld = false; sprintPointer = null; return; }
       canvas.setPointerCapture(e.pointerId);
       sprintPointer = e.pointerId; sprintHeld = true;
       return;
@@ -2274,7 +2277,7 @@ function update(dt) {
   }
 
   if (mode === "easy") updatePowerups(dt); else if (mode === "hard") updateDebuffs(dt);
-  if (debuff === "slow") running = false;   // lentidão: não pode correr
+  if (debuff === "slow") { running = false; sprintHeld = false; sprintPointer = null; stickRunning = false; } // lentidão: corrida bloqueada
 
   movePlayer(dt);
 
