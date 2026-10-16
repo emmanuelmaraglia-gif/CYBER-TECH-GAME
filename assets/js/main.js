@@ -282,14 +282,20 @@ function keepPlayerBelowBossHud() {
 }
 
 function resizeCanvas() {
-  canvas.width = Math.max(100, window.innerWidth - 10);
-  canvas.height = Math.max(100, window.innerHeight - 10);
+  // Usa a área realmente disponível ao canvas, não a janela inteira: em celulares
+  // a barra do navegador/teclado virtual pode alterar a altura visível.
+  const rect = canvas.getBoundingClientRect();
+  const nextWidth = Math.max(100, Math.round(rect.width));
+  const nextHeight = Math.max(100, Math.round(rect.height));
+  if (canvas.width !== nextWidth) canvas.width = nextWidth;
+  if (canvas.height !== nextHeight) canvas.height = nextHeight;
   [player, item, ...obstacles].forEach(clampEntity);
   obstacles.forEach(o => {
     if (o.ax !== undefined) { o.ax = Math.max(0, Math.min(o.ax, W() - o.size)); o.ay = Math.max(0, Math.min(o.ay, H() - o.size)); }
   });
 }
 window.addEventListener("resize", resizeCanvas);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", resizeCanvas);
 
 // Modo fácil: reposiciona os brancos longe do jogador
 function shuffleObstacles() {
@@ -1492,47 +1498,61 @@ function showFirstOpportunity(message, aura) {
 function stunBoss() {
   bossSet("stun");
   const cx = boss.x + boss.size / 2, cy = boss.y + boss.size / 2;
-  const dropSize = 20;
+  const dropSize = 20, gap = 10;
   let dx = cx - Math.cos(boss.ang) * (boss.size / 2 + 30) - dropSize / 2;
   let dy = cy - Math.sin(boss.ang) * (boss.size / 2 + 30) - dropSize / 2;
 
-  // Os chifres do BULL ultrapassam o corpo: garanta pelo menos 10 px
-  // entre qualquer parte visível dos chifres e o bloquinho de recompensa.
   if (boss.idx === 0) {
-    const gap = 10;
-    const hornLeft = boss.x - 16, hornRight = boss.x + boss.size + 16;
-    const hornTop = boss.y - 14, hornBottom = boss.y + 12;
+    // Tenta todas as quatro posições a exatamente 10 px do BULL (incluindo os chifres).
+    const left = boss.x - 16, right = boss.x + boss.size + 16;
+    const top = boss.y - 14, bottom = boss.y + 12;
     const candidates = [
-      { x: hornLeft - gap - dropSize, y: cy - dropSize / 2, side: 'left' },
-      { x: hornRight + gap, y: cy - dropSize / 2, side: 'right' },
-      { x: cx - dropSize / 2, y: hornTop - gap - dropSize, side: 'top' },
-      { x: cx - dropSize / 2, y: hornBottom + gap, side: 'bottom' }
-    ].filter(c => c.x >= 0 && c.y >= 0 && c.x + dropSize <= W() && c.y + dropSize <= H());
-
-    const desiredX = dx + dropSize / 2, desiredY = dy + dropSize / 2;
-    candidates.sort((a, b) => Math.hypot(a.x + dropSize/2 - desiredX, a.y + dropSize/2 - desiredY) -
-                              Math.hypot(b.x + dropSize/2 - desiredX, b.y + dropSize/2 - desiredY));
-    if (candidates.length) {
-      dx = candidates[0].x;
-      dy = candidates[0].y;
+      { x: left - gap - dropSize, y: cy - dropSize / 2, side: 'left' },
+      { x: right + gap, y: cy - dropSize / 2, side: 'right' },
+      { x: cx - dropSize / 2, y: top - gap - dropSize, side: 'top' },
+      { x: cx - dropSize / 2, y: boss.y + boss.size + gap, side: 'bottom' },
+      // Opções adicionais nas laterais, para não falhar só porque o centro está bloqueado.
+      { x: left - gap - dropSize, y: boss.y - dropSize, side: 'left-top' },
+      { x: left - gap - dropSize, y: boss.y + boss.size, side: 'left-bottom' },
+      { x: right + gap, y: boss.y - dropSize, side: 'right-top' },
+      { x: right + gap, y: boss.y + boss.size, side: 'right-bottom' }
+    ];
+    const valid = candidates.filter(c =>
+      c.x >= 0 && c.y >= BOSS_HUD_SAFE_Y && c.x + dropSize <= W() && c.y + dropSize <= H() &&
+      // Distância de 10 px dos limites visíveis do BULL e sem sobreposição do corpo.
+      !(c.x < right + gap && c.x + dropSize > left - gap && c.y < bottom + gap && c.y + dropSize > top - gap) &&
+      !(c.x < boss.x + boss.size && c.x + dropSize > boss.x && c.y < boss.y + boss.size && c.y + dropSize > boss.y)
+    );
+    if (valid.length) {
+      const desiredX = dx + dropSize / 2, desiredY = dy + dropSize / 2;
+      valid.sort((a,b) => Math.hypot(a.x + dropSize/2 - desiredX, a.y + dropSize/2 - desiredY) -
+                          Math.hypot(b.x + dropSize/2 - desiredX, b.y + dropSize/2 - desiredY));
+      dx = valid[0].x; dy = valid[0].y;
     } else {
-      // Fallback para telas muito pequenas: tenta deslocar a recompensa para
-      // uma posição visível sem sobrepor a caixa do corpo do BULL.
-      const safe = [
-        { x: Math.max(0, boss.x - dropSize - gap), y: Math.max(0, Math.min(H()-dropSize, cy-dropSize/2)) },
-        { x: Math.min(W()-dropSize, boss.x+boss.size+gap), y: Math.max(0, Math.min(H()-dropSize, cy-dropSize/2)) },
-        { x: Math.max(0, Math.min(W()-dropSize, cx-dropSize/2)), y: Math.min(H()-dropSize, boss.y+boss.size+gap) }
-      ];
-      const valid = safe.find(c => c.x >= 0 && c.y >= 0 && c.x + dropSize <= W() && c.y + dropSize <= H());
-      if (valid) { dx = valid.x; dy = valid.y; }
+      // Último recurso para arenas estreitas: varre a área ao redor do boss até achar
+      // um quadrado dentro da tela, livre e separado do corpo por pelo menos 10 px.
+      let found = null, best = Infinity;
+      // Varredura completa em passos de 2 px. A caixa de exclusão inclui os chifres
+      // do BULL e mantém 10 px livres; também nunca coloca o drop atrás da HUD.
+      const exclusion = { left: boss.x - 16, right: boss.x + boss.size + 16,
+                          top: boss.y - 14, bottom: boss.y + boss.size + 2 };
+      for (let y = Math.max(BOSS_HUD_SAFE_Y, 0); y <= H() - dropSize; y += 2) {
+        for (let x = 0; x <= W() - dropSize; x += 2) {
+          const separated = x + dropSize + gap <= exclusion.left || x >= exclusion.right + gap ||
+                            y + dropSize + gap <= exclusion.top || y >= exclusion.bottom + gap;
+          if (!separated) continue;
+          const d = Math.hypot(x + dropSize/2 - (dx + dropSize/2), y + dropSize/2 - (dy + dropSize/2));
+          if (d < best) { best = d; found = {x,y}; }
+        }
+      }
+      if (found) { dx = found.x; dy = found.y; }
     }
   }
-  // Mantém a recompensa dentro da tela sem alterar a posição segura calculada.
   dx = Math.max(0, Math.min(W() - dropSize, dx));
   dy = Math.max(0, Math.min(H() - dropSize, dy));
   drop = { x: dx, y: dy, size: dropSize };
   showFirstOpportunity("AGORA É SUA CHANCE!", boss.idx !== 1);
-  if (boss.fury) { wave = { x: cx, y: cy, r: 10, hit: false }; shake = 0.5; beep(90, 0.3); }   // tremor + onda magnética
+  if (boss.fury) { wave = { x: cx, y: cy, r: 10, hit: false }; shake = 0.5; beep(90, 0.3); }
   else { shake = 0.15; beep(120, 0.15); }
 }
 
@@ -1683,7 +1703,7 @@ function spawnHorse(dir, f) {
   const startPos = verticalFuryFromWall
     ? wall.y + wall.h
     : (side > 0 ? -80 : max + 80);
-  horses.push({ dir, side, lane,
+  horses.push({ dir, side: verticalFuryFromWall ? 1 : side, lane,
                 pos: startPos, speed: f ? 1000 : 750, warn: f ? 1.2 : 1.0, t: 0, dmg: f ? 30 : 15, fury: f, hit: false });
 }
 
@@ -1868,15 +1888,10 @@ function drawHazards() {
     const scaleAlong = 180 / 130;
     const scaleAcross = visualCollisionSize / 44;
     ctx.save();
-    // O cavalo horizontal tem centro (pos, lane); o vertical tem centro (lane, pos).
-    // Centralizar a transformação nos eixos corretos impede que o cavalo vertical
-    // seja deslocado/pareça seguir uma trajetória diagonal durante a Fúria.
-    const horseCenterX = h.dir === "h" ? h.pos : h.lane;
-    const horseCenterY = h.dir === "h" ? h.lane : h.pos;
-    ctx.translate(horseCenterX, horseCenterY);
+    ctx.translate(h.pos, h.lane);
     ctx.scale(h.dir === "h" ? scaleAlong : scaleAcross,
               h.dir === "h" ? scaleAcross : scaleAlong);
-    ctx.translate(-horseCenterX, -horseCenterY);
+    ctx.translate(-h.pos, -h.lane);
     const tl = 130;                                    // rastro de luz
     ctx.fillStyle = "rgba(0,229,255,0.22)";
     if (h.dir === "h") ctx.fillRect(h.side > 0 ? h.pos - 40 - tl : h.pos + 40, h.lane - 12, tl, 24);

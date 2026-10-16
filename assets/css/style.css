@@ -14,13 +14,15 @@ html, body {
   margin: 0;
   width: 100%;
   height: 100%;
+  height: 100dvh;
   overflow: hidden;
 }
 
 body {
   background: var(--ground);
   border: 5px solid var(--border);
-  position: relative;
+  position: fixed;
+  inset: 0;
   font-family: Arial, sans-serif;
 }
 
@@ -29,6 +31,8 @@ canvas {
   touch-action: none;
   width: 100%;
   height: 100%;
+  max-width: 100vw;
+  max-height: 100%;
 }
 
 /* ===== Controles de toque ===== */
