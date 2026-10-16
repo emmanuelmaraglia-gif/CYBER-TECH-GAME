@@ -657,58 +657,37 @@ function blockedNameReason(name) {
   return forbiddenNameCombination(name) || (offensiveNameDetected(name) ? OFFENSIVE_NAME_MESSAGE : "");
 }
 
-// Efeito de áudio da mensagem de zoeira: primeiro a voz enviada pelo usuário,
-// depois o vídeo/música selecionado no YouTube, usando o player oficial incorporado.
-const auraVoice = new Audio("assets/audio/aura-betinha.ogg");
+// Efeito de áudio da mensagem: primeiro a gravação de voz (se estiver instalada),
+// depois a phonk local cortada a partir dos 7 segundos. Não abre player externo.
+const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
 auraVoice.preload = "auto";
+const auraPhonk = new Audio("assets/audio/aura-phonk.mp3");
+auraPhonk.preload = "auto";
+auraPhonk.volume = 1.0;
 let auraEffectActive = false;
-let auraPlayer = null;
-let auraPlayerReady = false;
-let auraYTRequested = false;
-function requestAuraYouTubePlayer() {
-  if (auraYTRequested) return;
-  auraYTRequested = true;
-  window.onYouTubeIframeAPIReady = () => {
-    auraPlayer = new YT.Player("auraPhonkPlayer", {
-      videoId: "orI5sxdic9Q",
-      playerVars: { autoplay: 0, controls: 1, playsinline: 1, rel: 0 },
-      events: { onReady: () => {
-        auraPlayerReady = true;
-        if (auraEffectActive && auraVoice.ended) { try { auraPlayer.playVideo(); } catch (e) {} }
-      } }
-    });
-  };
-  const tag = document.createElement("script");
-  tag.src = "https://www.youtube.com/iframe_api";
-  document.head.appendChild(tag);
-}
-requestAuraYouTubePlayer();
 function playAuraEffect() {
   if (auraEffectActive) return;
   auraEffectActive = true;
-  const playerBox = document.getElementById("auraPhonkBox");
-  if (playerBox) playerBox.classList.remove("aura-phonk-hidden");
-  try { if (auraPlayerReady && auraPlayer) auraPlayer.stopVideo(); } catch (e) {}
+  auraPhonk.pause();
+  auraPhonk.currentTime = 0;
   auraVoice.pause();
   auraVoice.currentTime = 0;
   const startPhonk = () => {
-    try {
-      if (auraPlayerReady && auraPlayer) auraPlayer.playVideo();
-      else if (playerBox) playerBox.classList.add("aura-phonk-waiting");
-    } catch (e) {}
+    if (!auraEffectActive) return;
+    auraPhonk.currentTime = 0;
+    auraPhonk.play().catch(() => {});
   };
   auraVoice.onended = startPhonk;
   auraVoice.onerror = startPhonk;
-  auraVoice.play().catch(() => startPhonk());
+  auraVoice.play().catch(startPhonk);
 }
 let lastAuraKind = "";
 function stopAuraEffect() {
   auraEffectActive = false;
   auraVoice.pause();
   auraVoice.currentTime = 0;
-  const playerBox = document.getElementById("auraPhonkBox");
-  if (playerBox) playerBox.classList.add("aura-phonk-hidden");
-  try { if (auraPlayerReady && auraPlayer) auraPlayer.stopVideo(); } catch (e) {}
+  auraPhonk.pause();
+  auraPhonk.currentTime = 0;
 }
 nameInput.addEventListener("input", () => {
   const clean = sanitizeName(nameInput.value);
