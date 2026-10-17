@@ -695,20 +695,14 @@ function blockedNameReason(name) {
   return forbiddenNameCombination(name) || (offensiveNameDetected(name) ? OFFENSIVE_NAME_MESSAGE : "");
 }
 
-// Efeito de áudio: primeiro a gravação de voz e depois a phonk SEMPRE desde 0:00.
-// Otimizado para celular (iOS/Android) — seek + play confiáveis + anti-cache.
+// Efeito de áudio: voz primeiro, depois phonk desde 0:00.
+// Versão simples e estável para Android + iPhone (também funciona no PC).
 const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
 auraVoice.preload = "auto";
-auraVoice.setAttribute("playsinline", "");
-auraVoice.setAttribute("webkit-playsinline", "");
 
-// Nome novo + query string pra forçar o celular a baixar o arquivo novo (anti-cache)
-const PHONK_SRC = "assets/audio/vai-jogando-phonk.mp3?v=3";
-let auraPhonk = new Audio(PHONK_SRC);
+const auraPhonk = new Audio("assets/audio/vai-jogando-phonk.mp3");
 auraPhonk.preload = "auto";
 auraPhonk.volume = 1.0;
-auraPhonk.setAttribute("playsinline", "");
-auraPhonk.setAttribute("webkit-playsinline", "");
 
 let auraEffectActive = false;
 
@@ -716,66 +710,79 @@ function playAuraEffect() {
   if (auraEffectActive) return;
   auraEffectActive = true;
 
-  // Silencia a música de fundo
-  bgm.pause();
+  // Pausa a música de fundo
+  try { bgm.pause(); } catch (e) {}
 
-  // Reinicia a voz do zero
-  auraVoice.pause();
-  auraVoice.currentTime = 0;
+  // Para qualquer phonk que estiver tocando e volta pro início
+  try {
+    auraPhonk.pause();
+    auraPhonk.currentTime = 0;
+  } catch (e) {}
 
-  // Cria um Audio novo toda vez — evita bug de seek/cache no celular
-  try { auraPhonk.pause(); } catch (e) {}
-  auraPhonk = new Audio(PHONK_SRC);
-  auraPhonk.preload = "auto";
-  auraPhonk.volume = 1.0;
-  auraPhonk.setAttribute("playsinline", "");
-  auraPhonk.setAttribute("webkit-playsinline", "");
+  // Reinicia a voz
+  try {
+    auraVoice.pause();
+    auraVoice.currentTime = 0;
+  } catch (e) {}
 
+  // Quando a voz terminar (ou der erro), toca a phonk do zero
   const startPhonk = () => {
     if (!auraEffectActive) return;
 
-    const doPlay = () => {
+    const playPhonk = () => {
       if (!auraEffectActive) return;
       try { auraPhonk.currentTime = 0; } catch (e) {}
-      auraPhonk.play().catch(() => {
-        auraEffectActive = false;
-        if (musicStarted && !document.hidden) bgm.play().catch(() => {});
-      });
+      const p = auraPhonk.play();
+      if (p && typeof p.catch === "function") {
+        p.catch(() => {
+          // Se o play falhar, libera e volta a BGM
+          auraEffectActive = false;
+          if (musicStarted && !document.hidden) {
+            try { bgm.play().catch(() => {}); } catch (e) {}
+          }
+        });
+      }
     };
 
-    // Quando o áudio estiver pronto, força 0:00 e toca
-    const onReady = () => {
-      if (!auraEffectActive) return;
-      try { auraPhonk.currentTime = 0; } catch (e) {}
-      // Em alguns celulares o seek é assíncrono → espera o "seeked"
-      let played = false;
-      const finish = () => {
-        if (played) return;
-        played = true;
-        doPlay();
-      };
-      auraPhonk.addEventListener("seeked", finish, { once: true });
-      // Timeout de segurança caso o seeked não dispare
-      setTimeout(finish, 200);
-    };
+    // Garante que currentTime = 0 antes de tocar
+    try {
+      auraPhonk.pause();
+      auraPhonk.currentTime = 0;
+    } catch (e) {}
 
+    // Se o arquivo já carregou, toca; senão espera canplay
     if (auraPhonk.readyState >= 2) {
-      onReady();
+      playPhonk();
     } else {
-      auraPhonk.addEventListener("canplay", onReady, { once: true });
-      auraPhonk.load();
+      const onCanPlay = () => {
+        auraPhonk.removeEventListener("canplay", onCanPlay);
+        playPhonk();
+      };
+      auraPhonk.addEventListener("canplay", onCanPlay);
+      try { auraPhonk.load(); } catch (e) {}
+      // Fallback: tenta tocar mesmo assim após um curto delay
+      setTimeout(() => {
+        auraPhonk.removeEventListener("canplay", onCanPlay);
+        if (auraEffectActive) playPhonk();
+      }, 400);
     }
+  };
 
-    auraPhonk.onended = () => {
-      if (!auraEffectActive) return;
-      auraEffectActive = false;
-      if (musicStarted && !document.hidden) bgm.play().catch(() => {});
-    };
+  auraPhonk.onended = () => {
+    if (!auraEffectActive) return;
+    auraEffectActive = false;
+    if (musicStarted && !document.hidden) {
+      try { bgm.play().catch(() => {}); } catch (e) {}
+    }
   };
 
   auraVoice.onended = startPhonk;
   auraVoice.onerror = startPhonk;
-  auraVoice.play().catch(startPhonk);
+
+  const voicePlay = auraVoice.play();
+  if (voicePlay && typeof voicePlay.catch === "function") {
+    voicePlay.catch(startPhonk);
+  }
 }
 
 let lastAuraKind = "";
@@ -788,8 +795,11 @@ function stopAuraEffect() {
     auraPhonk.pause();
     auraPhonk.currentTime = 0;
   } catch (e) {}
-  if (musicStarted && !document.hidden) bgm.play().catch(() => {});
+  if (musicStarted && !document.hidden) {
+    try { bgm.play().catch(() => {}); } catch (e) {}
+  }
 }
+
 nameInput.addEventListener("input", () => {
   const clean = sanitizeName(nameInput.value);
   if (clean !== nameInput.value) nameInput.value = clean;
@@ -2615,6 +2625,22 @@ function startMusic() {
   bgm.play().then(() => {
     musicStarted = true;
     MUSIC_EVENTS.forEach(ev => window.removeEventListener(ev, startMusic, true));
+    // Desbloqueia também os áudios do efeito (voz + phonk) no celular
+    try {
+      const unlock = (a) => {
+        if (!a) return;
+        const wasMuted = a.muted;
+        a.muted = true;
+        const pr = a.play();
+        if (pr && typeof pr.then === "function") {
+          pr.then(() => { a.pause(); a.currentTime = 0; a.muted = wasMuted; }).catch(() => { a.muted = wasMuted; });
+        } else {
+          a.pause(); a.currentTime = 0; a.muted = wasMuted;
+        }
+      };
+      unlock(auraVoice);
+      unlock(auraPhonk);
+    } catch (e) {}
   }).catch(() => {});       // se o navegador recusar, tenta de novo na próxima interação
 }
 MUSIC_EVENTS.forEach(ev => window.addEventListener(ev, startMusic, true));
