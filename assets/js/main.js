@@ -716,10 +716,23 @@ function playAuraEffect() {
     const playFromStart = () => {
       if (!auraEffectActive) return;
       auraPhonk.currentTime = 0;
-      auraPhonk.play().catch(() => {
-        auraEffectActive = false;
-        if (musicStarted && !document.hidden) bgm.play().catch(() => {});
-      });
+
+const iniciarPhonk = () => {
+  if (!auraEffectActive) return;
+
+  auraPhonk.play().catch(() => {
+    auraEffectActive = false;
+    if (musicStarted && !document.hidden) {
+      bgm.play().catch(() => {});
+    }
+  });
+};
+
+if (auraPhonk.currentTime === 0) {
+  iniciarPhonk();
+} else {
+  auraPhonk.addEventListener("seeked", iniciarPhonk, { once: true });
+}
     };
     if (auraPhonk.readyState >= 1) playFromStart();
     else {
