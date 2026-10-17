@@ -695,8 +695,9 @@ function blockedNameReason(name) {
   return forbiddenNameCombination(name) || (offensiveNameDetected(name) ? OFFENSIVE_NAME_MESSAGE : "");
 }
 
-// Efeito de áudio: voz primeiro, depois phonk desde 0:00.
-// Versão simples e estável para Android + iPhone (também funciona no PC).
+// Efeito de áudio: voz primeiro, depois phonk SEMPRE do 0:00.
+// Correção mobile: desbloqueia a phonk NO MESMO gesto (digitação),
+// senão o Android/iPhone bloqueia o play() depois que a voz termina.
 const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
 auraVoice.preload = "auto";
 
@@ -710,61 +711,65 @@ function playAuraEffect() {
   if (auraEffectActive) return;
   auraEffectActive = true;
 
-  // Pausa a música de fundo
   try { bgm.pause(); } catch (e) {}
 
-  // Para qualquer phonk que estiver tocando e volta pro início
+  // Reinicia os dois áudios
+  try {
+    auraVoice.pause();
+    auraVoice.currentTime = 0;
+  } catch (e) {}
   try {
     auraPhonk.pause();
     auraPhonk.currentTime = 0;
   } catch (e) {}
 
-  // Reinicia a voz
+  // === CRÍTICO NO CELULAR ===
+  // Desbloqueia a phonk DENTRO do gesto do usuário (agora),
+  // tocando mudo e pausando em seguida. Assim o play() real
+  // depois da voz não é bloqueado pela política de autoplay.
   try {
-    auraVoice.pause();
-    auraVoice.currentTime = 0;
-  } catch (e) {}
+    auraPhonk.muted = true;
+    const unlockPromise = auraPhonk.play();
+    const finishUnlock = () => {
+      try {
+        auraPhonk.pause();
+        auraPhonk.currentTime = 0;
+        auraPhonk.muted = false;
+      } catch (e) {}
+    };
+    if (unlockPromise && typeof unlockPromise.then === "function") {
+      unlockPromise.then(finishUnlock).catch(finishUnlock);
+    } else {
+      finishUnlock();
+    }
+  } catch (e) {
+    try { auraPhonk.muted = false; } catch (e2) {}
+  }
 
-  // Quando a voz terminar (ou der erro), toca a phonk do zero
   const startPhonk = () => {
     if (!auraEffectActive) return;
-
-    const playPhonk = () => {
-      if (!auraEffectActive) return;
-      try { auraPhonk.currentTime = 0; } catch (e) {}
-      const p = auraPhonk.play();
-      if (p && typeof p.catch === "function") {
-        p.catch(() => {
-          // Se o play falhar, libera e volta a BGM
-          auraEffectActive = false;
-          if (musicStarted && !document.hidden) {
-            try { bgm.play().catch(() => {}); } catch (e) {}
-          }
-        });
-      }
-    };
-
-    // Garante que currentTime = 0 antes de tocar
     try {
-      auraPhonk.pause();
+      auraPhonk.muted = false;
       auraPhonk.currentTime = 0;
     } catch (e) {}
-
-    // Se o arquivo já carregou, toca; senão espera canplay
-    if (auraPhonk.readyState >= 2) {
-      playPhonk();
-    } else {
-      const onCanPlay = () => {
-        auraPhonk.removeEventListener("canplay", onCanPlay);
-        playPhonk();
-      };
-      auraPhonk.addEventListener("canplay", onCanPlay);
-      try { auraPhonk.load(); } catch (e) {}
-      // Fallback: tenta tocar mesmo assim após um curto delay
-      setTimeout(() => {
-        auraPhonk.removeEventListener("canplay", onCanPlay);
-        if (auraEffectActive) playPhonk();
-      }, 400);
+    const p = auraPhonk.play();
+    if (p && typeof p.catch === "function") {
+      p.catch(() => {
+        // Última tentativa após pequeno delay
+        setTimeout(() => {
+          if (!auraEffectActive) return;
+          try {
+            auraPhonk.currentTime = 0;
+            auraPhonk.muted = false;
+          } catch (e) {}
+          auraPhonk.play().catch(() => {
+            auraEffectActive = false;
+            if (musicStarted && !document.hidden) {
+              try { bgm.play().catch(() => {}); } catch (e) {}
+            }
+          });
+        }, 100);
+      });
     }
   };
 
@@ -794,6 +799,7 @@ function stopAuraEffect() {
     auraVoice.currentTime = 0;
     auraPhonk.pause();
     auraPhonk.currentTime = 0;
+    auraPhonk.muted = false;
   } catch (e) {}
   if (musicStarted && !document.hidden) {
     try { bgm.play().catch(() => {}); } catch (e) {}
