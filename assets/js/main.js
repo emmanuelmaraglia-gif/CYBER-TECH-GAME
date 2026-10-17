@@ -700,7 +700,7 @@ function blockedNameReason(name) {
 const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
 auraVoice.preload = "auto";
 
-const auraPhonk = new Audio("assets/audio/vai-jogando-phonk.mp3");
+const auraPhonk = new Audio("assets/audio/aura-phonk.mp3");
 auraPhonk.preload = "auto";
 auraPhonk.volume = 1.0;
 
