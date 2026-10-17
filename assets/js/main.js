@@ -709,17 +709,17 @@ function playAuraEffect() {
 
   // Silencia a música de fundo durante a gravação e a phonk.
   bgm.pause();
-  auraPhonk.pause();
   auraPhonk.currentTime = 0;
-  auraVoice.pause();
+  auraPhonk.pause();
   auraVoice.currentTime = 0;
+  auraVoice.pause();
 
   const startPhonk = () => {
     if (!auraEffectActive) return;
 
     // Garante que começa exatamente do início (0:00)
-    auraPhonk.pause();
     auraPhonk.currentTime = 0;
+    auraPhonk.pause();
 
     const tryPlay = () => {
       if (!auraEffectActive) return;
