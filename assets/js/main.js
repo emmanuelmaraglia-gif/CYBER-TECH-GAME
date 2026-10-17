@@ -695,8 +695,7 @@ function blockedNameReason(name) {
   return forbiddenNameCombination(name) || (offensiveNameDetected(name) ? OFFENSIVE_NAME_MESSAGE : "");
 }
 
-// Efeito de áudio: SEMPRE a voz primeiro (com som), depois a phonk do 0:00.
-// Não muta nem interrompe a voz. A phonk só começa quando a voz termina.
+// Efeito de áudio: voz (com som) → depois phonk do 0:00.
 const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
 auraVoice.preload = "auto";
 auraVoice.volume = 1.0;
@@ -711,17 +710,15 @@ function playAuraEffect() {
   if (auraEffectActive) return;
   auraEffectActive = true;
 
-  // Pausa só a música de fundo
   try { bgm.pause(); } catch (e) {}
 
-  // Garante que a phonk não está tocando por cima da voz
   try {
     auraPhonk.pause();
     auraPhonk.currentTime = 0;
     auraPhonk.muted = false;
+    auraPhonk.volume = 1.0;
   } catch (e) {}
 
-  // Prepara a VOZ do zero, com volume normal
   try {
     auraVoice.pause();
     auraVoice.currentTime = 0;
@@ -739,13 +736,9 @@ function playAuraEffect() {
     const p = auraPhonk.play();
     if (p && typeof p.catch === "function") {
       p.catch(() => {
-        // Uma nova tentativa (alguns Androids bloqueiam o 1º play fora do gesto)
         setTimeout(() => {
           if (!auraEffectActive) return;
-          try {
-            auraPhonk.currentTime = 0;
-            auraPhonk.muted = false;
-          } catch (e) {}
+          try { auraPhonk.currentTime = 0; } catch (e) {}
           auraPhonk.play().catch(() => {
             auraEffectActive = false;
             if (musicStarted && !document.hidden) {
@@ -765,17 +758,13 @@ function playAuraEffect() {
     }
   };
 
-  // Quando a VOZ terminar → aí sim a phonk
   auraVoice.onended = startPhonk;
   auraVoice.onerror = startPhonk;
 
-  // Toca a VOZ agora (gesto do usuário = digitação)
+  // Só a voz agora — sem desbloquear/pausar nada por cima
   const voicePlay = auraVoice.play();
-  if (voicePlay && typeof voicePlay.then === "function") {
-    voicePlay.then(() => {
-      // Enquanto a voz toca, só prepara a phonk (NÃO toca por cima)
-      try { auraPhonk.load(); } catch (e) {}
-    }).catch(startPhonk);
+  if (voicePlay && typeof voicePlay.catch === "function") {
+    voicePlay.catch(startPhonk);
   }
 }
 
@@ -786,10 +775,8 @@ function stopAuraEffect() {
   try {
     auraVoice.pause();
     auraVoice.currentTime = 0;
-    auraVoice.muted = false;
     auraPhonk.pause();
     auraPhonk.currentTime = 0;
-    auraPhonk.muted = false;
   } catch (e) {}
   if (musicStarted && !document.hidden) {
     try { bgm.play().catch(() => {}); } catch (e) {}
@@ -2621,22 +2608,7 @@ function startMusic() {
   bgm.play().then(() => {
     musicStarted = true;
     MUSIC_EVENTS.forEach(ev => window.removeEventListener(ev, startMusic, true));
-    // Desbloqueia também os áudios do efeito (voz + phonk) no celular
-    try {
-      const unlock = (a) => {
-        if (!a) return;
-        const wasMuted = a.muted;
-        a.muted = true;
-        const pr = a.play();
-        if (pr && typeof pr.then === "function") {
-          pr.then(() => { a.pause(); a.currentTime = 0; a.muted = wasMuted; }).catch(() => { a.muted = wasMuted; });
-        } else {
-          a.pause(); a.currentTime = 0; a.muted = wasMuted;
-        }
-      };
-      unlock(auraVoice);
-      unlock(auraPhonk);
-    } catch (e) {}
+    // NÃO mexer em auraVoice/auraPhonk aqui — isso pausava a voz no meio da fala no celular.
   }).catch(() => {});       // se o navegador recusar, tenta de novo na próxima interação
 }
 MUSIC_EVENTS.forEach(ev => window.addEventListener(ev, startMusic, true));
