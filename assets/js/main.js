@@ -695,12 +695,17 @@ function blockedNameReason(name) {
   return forbiddenNameCombination(name) || (offensiveNameDetected(name) ? OFFENSIVE_NAME_MESSAGE : "");
 }
 
-// Efeito de áudio: voz (com som) → depois phonk do 0:00.
-const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
+// Efeito de áudio: voz (com som) → phonk do 0:00.
+// Estratégia anti-Android: recria o Audio da voz a cada play (estado limpo)
+// e NÃO pula para a phonk se a voz falhar na 1ª tentativa — tenta de novo.
+const VOICE_SRC = "assets/audio/aura-betinha-voz.mp3";
+const PHONK_SRC = "assets/audio/aura-phonk.mp3";
+
+let auraVoice = new Audio(VOICE_SRC);
 auraVoice.preload = "auto";
 auraVoice.volume = 1.0;
 
-const auraPhonk = new Audio("assets/audio/aura-phonk.mp3");
+let auraPhonk = new Audio(PHONK_SRC);
 auraPhonk.preload = "auto";
 auraPhonk.volume = 1.0;
 
@@ -712,6 +717,7 @@ function playAuraEffect() {
 
   try { bgm.pause(); } catch (e) {}
 
+  // Para phonk se estiver tocando
   try {
     auraPhonk.pause();
     auraPhonk.currentTime = 0;
@@ -719,12 +725,12 @@ function playAuraEffect() {
     auraPhonk.volume = 1.0;
   } catch (e) {}
 
-  try {
-    auraVoice.pause();
-    auraVoice.currentTime = 0;
-    auraVoice.muted = false;
-    auraVoice.volume = 1.0;
-  } catch (e) {}
+  // Recria a voz do zero (evita estado "muted/pausado" preso no Android)
+  try { auraVoice.pause(); } catch (e) {}
+  auraVoice = new Audio(VOICE_SRC);
+  auraVoice.preload = "auto";
+  auraVoice.volume = 1.0;
+  auraVoice.muted = false;
 
   const startPhonk = () => {
     if (!auraEffectActive) return;
@@ -759,13 +765,29 @@ function playAuraEffect() {
   };
 
   auraVoice.onended = startPhonk;
-  auraVoice.onerror = startPhonk;
+  auraVoice.onerror = () => {
+    // Se o arquivo da voz falhar de verdade, aí sim vai para a phonk
+    startPhonk();
+  };
 
-  // Só a voz agora — sem desbloquear/pausar nada por cima
-  const voicePlay = auraVoice.play();
-  if (voicePlay && typeof voicePlay.catch === "function") {
-    voicePlay.catch(startPhonk);
-  }
+  // Toca a voz; se a 1ª tentativa falhar, tenta DE NOVO antes de ir para a phonk
+  const tryPlayVoice = (attempt) => {
+    if (!auraEffectActive) return;
+    const pr = auraVoice.play();
+    if (pr && typeof pr.then === "function") {
+      pr.then(() => {
+        // Voz tocando — ok
+      }).catch(() => {
+        if (attempt < 2) {
+          setTimeout(() => tryPlayVoice(attempt + 1), 80);
+        } else {
+          // Só depois de 2 falhas vai para a phonk
+          startPhonk();
+        }
+      });
+    }
+  };
+  tryPlayVoice(1);
 }
 
 let lastAuraKind = "";
@@ -797,7 +819,28 @@ nameInput.addEventListener("input", () => {
   else if (!numericKind && lastAuraKind && auraEffectActive) stopAuraEffect();
   lastAuraKind = numericKind;
 });
-nameInput.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); loginClick(); } });
+// Esquenta o áudio UMA vez quando a pessoa toca no campo de nome
+// (gesto válido no Android). Não roda de novo a cada tecla para não pausar a voz.
+let auraAudioWarmed = false;
+function warmAuraAudio() {
+  if (auraAudioWarmed || auraEffectActive) return;
+  auraAudioWarmed = true;
+  try {
+    [auraVoice, auraPhonk].forEach(a => {
+      if (!a) return;
+      const p = a.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => { try { a.pause(); a.currentTime = 0; } catch (e) {} }).catch(() => {});
+      }
+    });
+  } catch (e) {}
+}
+nameInput.addEventListener("pointerdown", warmAuraAudio, { passive: true });
+nameInput.addEventListener("touchstart", warmAuraAudio, { passive: true });
+nameInput.addEventListener("focus", warmAuraAudio);
+nameInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); loginClick(); }
+});
 
 async function loginClick() {
   if (loginBusy || screen !== "login") return;
