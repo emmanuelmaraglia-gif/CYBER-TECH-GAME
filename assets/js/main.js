@@ -282,14 +282,20 @@ function keepPlayerBelowBossHud() {
 }
 
 function resizeCanvas() {
-  canvas.width = Math.max(100, window.innerWidth - 10);
-  canvas.height = Math.max(100, window.innerHeight - 10);
+  // Usa a área realmente disponível ao canvas, não a janela inteira: em celulares
+  // a barra do navegador/teclado virtual pode alterar a altura visível.
+  const rect = canvas.getBoundingClientRect();
+  const nextWidth = Math.max(100, Math.round(rect.width));
+  const nextHeight = Math.max(100, Math.round(rect.height));
+  if (canvas.width !== nextWidth) canvas.width = nextWidth;
+  if (canvas.height !== nextHeight) canvas.height = nextHeight;
   [player, item, ...obstacles].forEach(clampEntity);
   obstacles.forEach(o => {
     if (o.ax !== undefined) { o.ax = Math.max(0, Math.min(o.ax, W() - o.size)); o.ay = Math.max(0, Math.min(o.ay, H() - o.size)); }
   });
 }
 window.addEventListener("resize", resizeCanvas);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", resizeCanvas);
 
 // Modo fácil: reposiciona os brancos longe do jogador
 function shuffleObstacles() {
@@ -345,7 +351,7 @@ function startGame() {
   item.x = p.x; item.y = p.y; keepOffPause(item);
 
   const cfg = obstacleSettings();
-  const playerMargin = Math.min(hard ? 130 : 70, Math.min(W(), H()) / 3);
+  const playerMargin = Math.min(hard ? 65 : 70, Math.min(W(), H()) / 3);
   obstacles = [];
   for (let i = 0; i < cfg.count; i++) {
     const o = { size: 25, gap: cfg.gap };
@@ -590,6 +596,24 @@ function forbiddenNameCombinationKind(name) {
   const normalized = normalizeNumberWords(name);
   const tokens = normalized ? normalized.split(/\s+/) : [];
   const compact = normalized.replace(/\s+/g, "");
+  // Lista explícita de formas coladas: evita que nomes como "sixseven" escapem
+  // do filtro por diferenças de normalização, espaços ou pontuação.
+  const joinedForbidden = new Set([
+    "sixseven", "sevensix", "six7", "7six", "67", "76",
+    "sixtyseven", "seventysixty", "sessentaesete", "seteesessenta",
+    "sessentaesete", "sesentaysiete", "sieteysesenta", "soixantesept",
+    "septsoixante", "sessantaesette", "settesessanta", "sechzigsieben",
+    "siebensechzig", "zestigzeven", "zevenzestig",
+    "fortytwo", "twoforty", "quarentaedois", "doisequarenta",
+    "cuarentaydos", "dosycuarenta", "quarantadue", "duequaranta",
+    "sixtyone", "onesixty", "sessentaeum", "umsessenta",
+    "sesentayuno", "unoysesenta", "soixanteetun", "unsoixante"
+  ]);
+  if (joinedForbidden.has(compact)) {
+    if (["sixseven", "sevensix", "six7", "7six", "67", "76", "sixtyseven", "seventysixty", "sessentaesete", "seteesessenta", "sesentaysiete", "sieteysesenta", "soixantesept", "septsoixante", "sessantaesette", "settesessanta", "sechzigsieben", "siebensechzig", "zestigzeven", "zevenzestig"].includes(compact)) return "67";
+    if (["fortytwo", "twoforty", "quarentaedois", "doisequarenta", "cuarentaydos", "dosycuarenta", "quarantadue", "duequaranta"].includes(compact)) return "42";
+    if (["sixtyone", "onesixty", "sessentaeum", "umsessenta", "sesentayuno", "unoysesenta", "soixanteetun", "unsoixante"].includes(compact)) return "61";
+  }
   const hasDigit6 = /6/.test(name), hasDigit7 = /7/.test(name);
   const hasDigit4 = /4/.test(name), hasDigit2 = /2/.test(name), hasDigit1 = /1/.test(name);
   if (hasDigit6 && hasDigit7) return "67";
@@ -604,6 +628,20 @@ function forbiddenNameCombinationKind(name) {
   if (hasAnyNumberWord(tokens, sixWords) && hasAnyNumberWord(tokens, sevenWords)) return "67";
   if (hasAnyNumberWord(tokens, fourWords) && hasAnyNumberWord(tokens, twoWords)) return "42";
   if (hasAnyNumberWord(tokens, sixWords) && hasAnyNumberWord(tokens, oneWords)) return "61";
+
+  // Também reconhece palavras coladas, como "sixseven", sem espaço ou hífen.
+  // Exige pelo menos 3 letras em cada parte para reduzir falsos positivos.
+  const hasJoinedPair = (leftForms, rightForms) => leftForms.some(left => {
+    const a = normalizeNumberWords(left).replace(/\s+/g, "");
+    if (a.length < 3) return false;
+    return rightForms.some(right => {
+      const b = normalizeNumberWords(right).replace(/\s+/g, "");
+      return b.length >= 3 && (compact.includes(a + b) || compact.includes(b + a));
+    });
+  });
+  if (hasJoinedPair(sixWords, sevenWords)) return "67";
+  if (hasJoinedPair(fourWords, twoWords)) return "42";
+  if (hasJoinedPair(sixWords, oneWords)) return "61";
 
   // Formas compostas e traduções frequentes das dezenas, com ou sem espaços/pontuação.
   const compactForms = forms => forms.some(form => compact.includes(normalizeNumberWords(form).replace(/\s+/g, "")));
@@ -657,46 +695,55 @@ function blockedNameReason(name) {
   return forbiddenNameCombination(name) || (offensiveNameDetected(name) ? OFFENSIVE_NAME_MESSAGE : "");
 }
 
-// Efeito de áudio da mensagem de zoeira: primeiro a voz, depois o phonk local.
-// O phonk sempre reinicia do 0:00 e interrompe quando o nome deixa de ser inválido.
-const auraVoice = new Audio("assets/audio/aura-betinha.ogg");
+// Efeito de áudio: primeiro a gravação de voz e depois a phonk desde 0:00.
+const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
 auraVoice.preload = "auto";
-const auraPhonk = new Audio("assets/audio/vai-jogando-vai-tomando.mp3");
+const auraPhonk = new Audio("assets/audio/aura-phonk.mp3");
 auraPhonk.preload = "auto";
-auraPhonk.loop = false;
+auraPhonk.volume = 1.0;
 let auraEffectActive = false;
-let auraResumeMusic = false;
 function playAuraEffect() {
   if (auraEffectActive) return;
   auraEffectActive = true;
-  const playerBox = document.getElementById("auraPhonkBox");
-  if (playerBox) playerBox.classList.remove("aura-phonk-hidden", "aura-phonk-waiting");
-  // Para e reinicia os dois áudios da sequência.
-  auraVoice.pause(); auraVoice.currentTime = 0;
-  auraPhonk.pause(); auraPhonk.currentTime = 0;
-  // Silencia a música de fundo durante a voz e o phonk.
-  auraResumeMusic = typeof bgm !== "undefined" && !bgm.paused;
-  if (typeof bgm !== "undefined") bgm.pause();
+  // Silencia a música de fundo durante a gravação e a phonk.
+  bgm.pause();
+  auraPhonk.pause();
+  auraPhonk.currentTime = 0;
+  auraVoice.pause();
+  auraVoice.currentTime = 0;
   const startPhonk = () => {
     if (!auraEffectActive) return;
-    auraPhonk.pause();
-    auraPhonk.currentTime = 0;
-    auraPhonk.play().catch(() => {});
+    const playFromStart = () => {
+      if (!auraEffectActive) return;
+      auraPhonk.currentTime = 0;
+      auraPhonk.play().catch(() => {
+        auraEffectActive = false;
+        if (musicStarted && !document.hidden) bgm.play().catch(() => {});
+      });
+    };
+    if (auraPhonk.readyState >= 1) playFromStart();
+    else {
+      auraPhonk.addEventListener("loadedmetadata", playFromStart, { once: true });
+      auraPhonk.load();
+    }
+  };
+  auraPhonk.onended = () => {
+    if (!auraEffectActive) return;
+    auraEffectActive = false;
+    if (musicStarted && !document.hidden) bgm.play().catch(() => {});
   };
   auraVoice.onended = startPhonk;
   auraVoice.onerror = startPhonk;
-  auraVoice.play().catch(() => startPhonk());
+  auraVoice.play().catch(startPhonk);
 }
 let lastAuraKind = "";
 function stopAuraEffect() {
   auraEffectActive = false;
-  auraVoice.pause(); auraVoice.currentTime = 0;
-  auraPhonk.pause(); auraPhonk.currentTime = 0;
-  auraVoice.onended = null; auraVoice.onerror = null;
-  const playerBox = document.getElementById("auraPhonkBox");
-  if (playerBox) playerBox.classList.add("aura-phonk-hidden");
-  // Retoma a música de fundo se ela estava tocando antes da pegadinha.
-  if (typeof bgm !== "undefined" && musicStarted) bgm.play().catch(() => {});
+  auraVoice.pause();
+  auraVoice.currentTime = 0;
+  auraPhonk.pause();
+  auraPhonk.currentTime = 0;
+  if (musicStarted && !document.hidden) bgm.play().catch(() => {});
 }
 nameInput.addEventListener("input", () => {
   const clean = sanitizeName(nameInput.value);
@@ -992,17 +1039,19 @@ function drawAnalog() {
   ctx.beginPath(); ctx.arc(b.x, b.y, 22, 0, Math.PI * 2); ctx.fill();                              // centro (repouso)
   ctx.fillStyle = "rgba(255,255,0,0.6)";
   ctx.beginPath(); ctx.arc(kx, ky, 22, 0, Math.PI * 2); ctx.fill();                                // bolinha
-  // Botão de corrida à direita: usa o ícone fornecido pelo usuário, com 30% de opacidade.
+  // Botão de corrida: fica visualmente indisponível durante LENTIDÃO no clássico difícil.
   const rb = sprintBase();
+  const sprintDisabled = mode === "hard" && debuff === "slow";
   ctx.save();
-  ctx.globalAlpha = 0.3; // mantém o botão e o ícone de correr com 30% de opacidade
-  ctx.shadowColor = sprintHeld ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.35)";
-  ctx.shadowBlur = sprintHeld ? 14 : 6;
-  ctx.fillStyle = sprintHeld ? "rgba(0,190,255,0.98)" : "rgba(0,160,255,0.86)";
+  ctx.globalAlpha = sprintDisabled ? 0.12 : 0.3;
+  ctx.shadowColor = sprintHeld && !sprintDisabled ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.35)";
+  ctx.shadowBlur = sprintHeld && !sprintDisabled ? 14 : 6;
+  ctx.fillStyle = sprintDisabled ? "rgba(120,120,120,0.7)" : (sprintHeld ? "rgba(0,190,255,0.98)" : "rgba(0,160,255,0.86)");
   ctx.beginPath(); ctx.arc(rb.x, rb.y, SPRINT_RADIUS, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = 0;
   if (runnerIcon.complete && runnerIcon.naturalWidth) {
     const iconSize = 52;
+    ctx.globalAlpha = sprintDisabled ? 0.15 : 1;
     ctx.drawImage(runnerIcon, rb.x - iconSize / 2, rb.y - iconSize / 2, iconSize, iconSize);
   }
   ctx.restore(); // restaura a opacidade dos demais controles
@@ -1192,6 +1241,7 @@ canvas.addEventListener("pointerdown", e => {
     const rb = sprintBase();
     if (Math.hypot(x - rb.x, y - rb.y) <= SPRINT_RADIUS + 12) {
       e.preventDefault();
+      if (mode === "hard" && debuff === "slow") { sprintHeld = false; sprintPointer = null; return; }
       canvas.setPointerCapture(e.pointerId);
       sprintPointer = e.pointerId; sprintHeld = true;
       return;
@@ -1458,47 +1508,61 @@ function showFirstOpportunity(message, aura) {
 function stunBoss() {
   bossSet("stun");
   const cx = boss.x + boss.size / 2, cy = boss.y + boss.size / 2;
-  const dropSize = 20;
+  const dropSize = 20, gap = 10;
   let dx = cx - Math.cos(boss.ang) * (boss.size / 2 + 30) - dropSize / 2;
   let dy = cy - Math.sin(boss.ang) * (boss.size / 2 + 30) - dropSize / 2;
 
-  // Os chifres do BULL ultrapassam o corpo: garanta pelo menos 10 px
-  // entre qualquer parte visível dos chifres e o bloquinho de recompensa.
   if (boss.idx === 0) {
-    const gap = 10;
-    const hornLeft = boss.x - 16, hornRight = boss.x + boss.size + 16;
-    const hornTop = boss.y - 14, hornBottom = boss.y + 12;
+    // Tenta todas as quatro posições a exatamente 10 px do BULL (incluindo os chifres).
+    const left = boss.x - 16, right = boss.x + boss.size + 16;
+    const top = boss.y - 14, bottom = boss.y + 12;
     const candidates = [
-      { x: hornLeft - gap - dropSize, y: cy - dropSize / 2, side: 'left' },
-      { x: hornRight + gap, y: cy - dropSize / 2, side: 'right' },
-      { x: cx - dropSize / 2, y: hornTop - gap - dropSize, side: 'top' },
-      { x: cx - dropSize / 2, y: hornBottom + gap, side: 'bottom' }
-    ].filter(c => c.x >= 0 && c.y >= 0 && c.x + dropSize <= W() && c.y + dropSize <= H());
-
-    const desiredX = dx + dropSize / 2, desiredY = dy + dropSize / 2;
-    candidates.sort((a, b) => Math.hypot(a.x + dropSize/2 - desiredX, a.y + dropSize/2 - desiredY) -
-                              Math.hypot(b.x + dropSize/2 - desiredX, b.y + dropSize/2 - desiredY));
-    if (candidates.length) {
-      dx = candidates[0].x;
-      dy = candidates[0].y;
+      { x: left - gap - dropSize, y: cy - dropSize / 2, side: 'left' },
+      { x: right + gap, y: cy - dropSize / 2, side: 'right' },
+      { x: cx - dropSize / 2, y: top - gap - dropSize, side: 'top' },
+      { x: cx - dropSize / 2, y: boss.y + boss.size + gap, side: 'bottom' },
+      // Opções adicionais nas laterais, para não falhar só porque o centro está bloqueado.
+      { x: left - gap - dropSize, y: boss.y - dropSize, side: 'left-top' },
+      { x: left - gap - dropSize, y: boss.y + boss.size, side: 'left-bottom' },
+      { x: right + gap, y: boss.y - dropSize, side: 'right-top' },
+      { x: right + gap, y: boss.y + boss.size, side: 'right-bottom' }
+    ];
+    const valid = candidates.filter(c =>
+      c.x >= 0 && c.y >= BOSS_HUD_SAFE_Y && c.x + dropSize <= W() && c.y + dropSize <= H() &&
+      // Distância de 10 px dos limites visíveis do BULL e sem sobreposição do corpo.
+      !(c.x < right + gap && c.x + dropSize > left - gap && c.y < bottom + gap && c.y + dropSize > top - gap) &&
+      !(c.x < boss.x + boss.size && c.x + dropSize > boss.x && c.y < boss.y + boss.size && c.y + dropSize > boss.y)
+    );
+    if (valid.length) {
+      const desiredX = dx + dropSize / 2, desiredY = dy + dropSize / 2;
+      valid.sort((a,b) => Math.hypot(a.x + dropSize/2 - desiredX, a.y + dropSize/2 - desiredY) -
+                          Math.hypot(b.x + dropSize/2 - desiredX, b.y + dropSize/2 - desiredY));
+      dx = valid[0].x; dy = valid[0].y;
     } else {
-      // Fallback para telas muito pequenas: tenta deslocar a recompensa para
-      // uma posição visível sem sobrepor a caixa do corpo do BULL.
-      const safe = [
-        { x: Math.max(0, boss.x - dropSize - gap), y: Math.max(0, Math.min(H()-dropSize, cy-dropSize/2)) },
-        { x: Math.min(W()-dropSize, boss.x+boss.size+gap), y: Math.max(0, Math.min(H()-dropSize, cy-dropSize/2)) },
-        { x: Math.max(0, Math.min(W()-dropSize, cx-dropSize/2)), y: Math.min(H()-dropSize, boss.y+boss.size+gap) }
-      ];
-      const valid = safe.find(c => c.x >= 0 && c.y >= 0 && c.x + dropSize <= W() && c.y + dropSize <= H());
-      if (valid) { dx = valid.x; dy = valid.y; }
+      // Último recurso para arenas estreitas: varre a área ao redor do boss até achar
+      // um quadrado dentro da tela, livre e separado do corpo por pelo menos 10 px.
+      let found = null, best = Infinity;
+      // Varredura completa em passos de 2 px. A caixa de exclusão inclui os chifres
+      // do BULL e mantém 10 px livres; também nunca coloca o drop atrás da HUD.
+      const exclusion = { left: boss.x - 16, right: boss.x + boss.size + 16,
+                          top: boss.y - 14, bottom: boss.y + boss.size + 2 };
+      for (let y = Math.max(BOSS_HUD_SAFE_Y, 0); y <= H() - dropSize; y += 2) {
+        for (let x = 0; x <= W() - dropSize; x += 2) {
+          const separated = x + dropSize + gap <= exclusion.left || x >= exclusion.right + gap ||
+                            y + dropSize + gap <= exclusion.top || y >= exclusion.bottom + gap;
+          if (!separated) continue;
+          const d = Math.hypot(x + dropSize/2 - (dx + dropSize/2), y + dropSize/2 - (dy + dropSize/2));
+          if (d < best) { best = d; found = {x,y}; }
+        }
+      }
+      if (found) { dx = found.x; dy = found.y; }
     }
   }
-  // Mantém a recompensa dentro da tela sem alterar a posição segura calculada.
   dx = Math.max(0, Math.min(W() - dropSize, dx));
   dy = Math.max(0, Math.min(H() - dropSize, dy));
   drop = { x: dx, y: dy, size: dropSize };
   showFirstOpportunity("AGORA É SUA CHANCE!", boss.idx !== 1);
-  if (boss.fury) { wave = { x: cx, y: cy, r: 10, hit: false }; shake = 0.5; beep(90, 0.3); }   // tremor + onda magnética
+  if (boss.fury) { wave = { x: cx, y: cy, r: 10, hit: false }; shake = 0.5; beep(90, 0.3); }
   else { shake = 0.15; beep(120, 0.15); }
 }
 
@@ -1649,7 +1713,7 @@ function spawnHorse(dir, f) {
   const startPos = verticalFuryFromWall
     ? wall.y + wall.h
     : (side > 0 ? -80 : max + 80);
-  horses.push({ dir, side, lane,
+  horses.push({ dir, side: verticalFuryFromWall ? 1 : side, lane,
                 pos: startPos, speed: f ? 1000 : 750, warn: f ? 1.2 : 1.0, t: 0, dmg: f ? 30 : 15, fury: f, hit: false });
 }
 
@@ -1834,10 +1898,15 @@ function drawHazards() {
     const scaleAlong = 180 / 130;
     const scaleAcross = visualCollisionSize / 44;
     ctx.save();
-    ctx.translate(h.pos, h.lane);
+    // FIX KNIGHT: centralizar a transformação no eixo correto para cada direção.
+    // Horizontal: centro (pos, lane). Vertical: centro (lane, pos).
+    // Assim a escala não desloca o cavalo vertical nem cria aparência diagonal.
+    const horseCenterX = h.dir === "h" ? h.pos : h.lane;
+    const horseCenterY = h.dir === "h" ? h.lane : h.pos;
+    ctx.translate(horseCenterX, horseCenterY);
     ctx.scale(h.dir === "h" ? scaleAlong : scaleAcross,
               h.dir === "h" ? scaleAcross : scaleAlong);
-    ctx.translate(-h.pos, -h.lane);
+    ctx.translate(-horseCenterX, -horseCenterY);
     const tl = 130;                                    // rastro de luz
     ctx.fillStyle = "rgba(0,229,255,0.22)";
     if (h.dir === "h") ctx.fillRect(h.side > 0 ? h.pos - 40 - tl : h.pos + 40, h.lane - 12, tl, 24);
@@ -1961,7 +2030,7 @@ function drawKnight(b) {
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, b.alpha));
   if (b.state === "swing") {                           // marca neon da brecha por onde dá para passar
-    const gw = b.fury ? 60 : 100;
+    const gw = b.fury ? 80 : 100; // Deve corresponder exatamente a bands[].gapW (normal: 100, fúria: 80).
     neon("#4dff88", 10); ctx.strokeStyle = "rgba(77,255,136," + (0.5 + 0.5 * Math.sin(performance.now() / 80)) + ")"; ctx.lineWidth = 4;
     [b.gapX, b.gapX + gw].forEach(gx => { ctx.beginPath(); ctx.moveTo(gx, b.y + b.size); ctx.lineTo(gx, H()); ctx.stroke(); });
     noNeon();
@@ -2220,7 +2289,7 @@ function update(dt) {
   }
 
   if (mode === "easy") updatePowerups(dt); else if (mode === "hard") updateDebuffs(dt);
-  if (debuff === "slow") running = false;   // lentidão: não pode correr
+  if (debuff === "slow") { running = false; sprintHeld = false; sprintPointer = null; stickRunning = false; } // lentidão: corrida bloqueada
 
   movePlayer(dt);
 
@@ -2393,8 +2462,16 @@ function draw() {
   // HUD
   ctx.shadowColor = "black"; ctx.shadowBlur = 5;
   ctx.fillStyle = "white";
-  ctx.font = "bold 22px 'Arial Black', Arial, sans-serif";
-  ctx.fillText("Pontuação: " + score, 15, 30);
+  // HUD responsivo: diminui a pontuação em telas estreitas e quando o número cresce.
+  const scoreLabel = "Pontuação: " + score;
+  const scoreMaxWidth = Math.max(70, W() * 0.39);
+  let scoreFontSize = Math.min(22, Math.max(10, W() * 0.032));
+  ctx.font = "bold " + scoreFontSize + "px 'Arial Black', Arial, sans-serif";
+  while (ctx.measureText(scoreLabel).width > scoreMaxWidth && scoreFontSize > 10) {
+    scoreFontSize -= 1;
+    ctx.font = "bold " + scoreFontSize + "px 'Arial Black', Arial, sans-serif";
+  }
+  ctx.fillText(scoreLabel, 15, 30);
   ctx.font = "bold 14px Arial";
   if (mode !== "boss") ctx.fillText(mode === "easy"
     ? "Troca de blocos: " + (collected % ITEMS_PER_SHUFFLE) + "/" + ITEMS_PER_SHUFFLE
@@ -2479,7 +2556,7 @@ function loop(ts) {
 
 // ===== MÚSICA DE FUNDO =====
 const MUSIC_VOLUME = 0.5;   // 50% do volume do aparelho da pessoa
-const bgm = new Audio("assets/audio/vai-jogando-vai-tomando.mp3");
+const bgm = new Audio("assets/audio/cyberpunk-suspense.mp3");
 bgm.loop = true;            // repete sem parar
 bgm.volume = MUSIC_VOLUME;
 bgm.preload = "auto";
