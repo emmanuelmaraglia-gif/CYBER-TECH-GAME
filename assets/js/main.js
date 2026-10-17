@@ -696,55 +696,81 @@ function blockedNameReason(name) {
 }
 
 // Efeito de áudio: primeiro a gravação de voz e depois a phonk SEMPRE desde 0:00.
+// Otimizado para celular (iOS/Android) — seek + play confiáveis + anti-cache.
 const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
 auraVoice.preload = "auto";
-const auraPhonk = new Audio("assets/audio/aura-phonk.mp3");
+auraVoice.setAttribute("playsinline", "");
+auraVoice.setAttribute("webkit-playsinline", "");
+
+// Nome novo + query string pra forçar o celular a baixar o arquivo novo (anti-cache)
+const PHONK_SRC = "assets/audio/vai-jogando-phonk.mp3?v=3";
+let auraPhonk = new Audio(PHONK_SRC);
 auraPhonk.preload = "auto";
 auraPhonk.volume = 1.0;
+auraPhonk.setAttribute("playsinline", "");
+auraPhonk.setAttribute("webkit-playsinline", "");
+
 let auraEffectActive = false;
 
 function playAuraEffect() {
   if (auraEffectActive) return;
   auraEffectActive = true;
 
-  // Silencia a música de fundo durante a gravação e a phonk.
+  // Silencia a música de fundo
   bgm.pause();
-  auraPhonk.currentTime = 0;
-  auraPhonk.pause();
-  auraVoice.currentTime = 0;
+
+  // Reinicia a voz do zero
   auraVoice.pause();
+  auraVoice.currentTime = 0;
+
+  // Cria um Audio novo toda vez — evita bug de seek/cache no celular
+  try { auraPhonk.pause(); } catch (e) {}
+  auraPhonk = new Audio(PHONK_SRC);
+  auraPhonk.preload = "auto";
+  auraPhonk.volume = 1.0;
+  auraPhonk.setAttribute("playsinline", "");
+  auraPhonk.setAttribute("webkit-playsinline", "");
 
   const startPhonk = () => {
     if (!auraEffectActive) return;
 
-    // Garante que começa exatamente do início (0:00)
-    auraPhonk.currentTime = 0;
-    auraPhonk.pause();
-
-    const tryPlay = () => {
+    const doPlay = () => {
       if (!auraEffectActive) return;
-      auraPhonk.currentTime = 0;
+      try { auraPhonk.currentTime = 0; } catch (e) {}
       auraPhonk.play().catch(() => {
         auraEffectActive = false;
-        if (musicStarted && !document.hidden) {
-          bgm.play().catch(() => {});
-        }
+        if (musicStarted && !document.hidden) bgm.play().catch(() => {});
       });
     };
 
-    // Se o áudio ainda não carregou o metadata, espera
-    if (auraPhonk.readyState >= 1) {
-      tryPlay();
+    // Quando o áudio estiver pronto, força 0:00 e toca
+    const onReady = () => {
+      if (!auraEffectActive) return;
+      try { auraPhonk.currentTime = 0; } catch (e) {}
+      // Em alguns celulares o seek é assíncrono → espera o "seeked"
+      let played = false;
+      const finish = () => {
+        if (played) return;
+        played = true;
+        doPlay();
+      };
+      auraPhonk.addEventListener("seeked", finish, { once: true });
+      // Timeout de segurança caso o seeked não dispare
+      setTimeout(finish, 200);
+    };
+
+    if (auraPhonk.readyState >= 2) {
+      onReady();
     } else {
-      auraPhonk.addEventListener("loadedmetadata", tryPlay, { once: true });
+      auraPhonk.addEventListener("canplay", onReady, { once: true });
       auraPhonk.load();
     }
-  };
 
-  auraPhonk.onended = () => {
-    if (!auraEffectActive) return;
-    auraEffectActive = false;
-    if (musicStarted && !document.hidden) bgm.play().catch(() => {});
+    auraPhonk.onended = () => {
+      if (!auraEffectActive) return;
+      auraEffectActive = false;
+      if (musicStarted && !document.hidden) bgm.play().catch(() => {});
+    };
   };
 
   auraVoice.onended = startPhonk;
@@ -756,10 +782,12 @@ let lastAuraKind = "";
 
 function stopAuraEffect() {
   auraEffectActive = false;
-  auraVoice.pause();
-  auraVoice.currentTime = 0;
-  auraPhonk.pause();
-  auraPhonk.currentTime = 0;
+  try {
+    auraVoice.pause();
+    auraVoice.currentTime = 0;
+    auraPhonk.pause();
+    auraPhonk.currentTime = 0;
+  } catch (e) {}
   if (musicStarted && !document.hidden) bgm.play().catch(() => {});
 }
 nameInput.addEventListener("input", () => {
