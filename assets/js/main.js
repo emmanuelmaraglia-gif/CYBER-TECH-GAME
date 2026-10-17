@@ -695,61 +695,65 @@ function blockedNameReason(name) {
   return forbiddenNameCombination(name) || (offensiveNameDetected(name) ? OFFENSIVE_NAME_MESSAGE : "");
 }
 
-// Efeito de áudio: primeiro a gravação de voz e depois a phonk desde 0:00.
+// Efeito de áudio: primeiro a gravação de voz e depois a phonk SEMPRE desde 0:00.
 const auraVoice = new Audio("assets/audio/aura-betinha-voz.mp3");
 auraVoice.preload = "auto";
 const auraPhonk = new Audio("assets/audio/aura-phonk.mp3");
 auraPhonk.preload = "auto";
 auraPhonk.volume = 1.0;
 let auraEffectActive = false;
+
 function playAuraEffect() {
   if (auraEffectActive) return;
   auraEffectActive = true;
+
   // Silencia a música de fundo durante a gravação e a phonk.
   bgm.pause();
   auraPhonk.pause();
   auraPhonk.currentTime = 0;
   auraVoice.pause();
   auraVoice.currentTime = 0;
+
   const startPhonk = () => {
     if (!auraEffectActive) return;
-    const playFromStart = () => {
+
+    // Garante que começa exatamente do início (0:00)
+    auraPhonk.pause();
+    auraPhonk.currentTime = 0;
+
+    const tryPlay = () => {
       if (!auraEffectActive) return;
       auraPhonk.currentTime = 0;
-
-const iniciarPhonk = () => {
-  if (!auraEffectActive) return;
-
-  auraPhonk.play().catch(() => {
-    auraEffectActive = false;
-    if (musicStarted && !document.hidden) {
-      bgm.play().catch(() => {});
-    }
-  });
-};
-
-if (auraPhonk.currentTime === 0) {
-  iniciarPhonk();
-} else {
-  auraPhonk.addEventListener("seeked", iniciarPhonk, { once: true });
-}
+      auraPhonk.play().catch(() => {
+        auraEffectActive = false;
+        if (musicStarted && !document.hidden) {
+          bgm.play().catch(() => {});
+        }
+      });
     };
-    if (auraPhonk.readyState >= 1) playFromStart();
-    else {
-      auraPhonk.addEventListener("loadedmetadata", playFromStart, { once: true });
+
+    // Se o áudio ainda não carregou o metadata, espera
+    if (auraPhonk.readyState >= 1) {
+      tryPlay();
+    } else {
+      auraPhonk.addEventListener("loadedmetadata", tryPlay, { once: true });
       auraPhonk.load();
     }
   };
+
   auraPhonk.onended = () => {
     if (!auraEffectActive) return;
     auraEffectActive = false;
     if (musicStarted && !document.hidden) bgm.play().catch(() => {});
   };
+
   auraVoice.onended = startPhonk;
   auraVoice.onerror = startPhonk;
   auraVoice.play().catch(startPhonk);
 }
+
 let lastAuraKind = "";
+
 function stopAuraEffect() {
   auraEffectActive = false;
   auraVoice.pause();
