@@ -23,7 +23,6 @@ const FIREBASE_CONFIG = {
 // O jogo só conversa com o objeto DB abaixo, então trocar de modo não muda o resto do código.
 // ============================================================
 const DB = (() => {
-  const DAY = 24 * 60 * 60 * 1000;   // o placar atualiza de 24h em 24h
   const useFirebase = typeof firebase !== "undefined" && typeof FIREBASE_CONFIG !== "undefined" &&
                       FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.apiKey !== "COLE_AQUI";
 
@@ -51,13 +50,12 @@ const DB = (() => {
       return snap.docs.map(d => ({ name: d.data().name, value: d.data()[field] }));
     };
 
-    // Cria a fotografia apenas depois de uma pontuação válida. updatedAt marca o início
-    // do ciclo atual; após 24h, a primeira visita/processo do jogo recalcula e reinicia o ciclo.
+    // Cria o primeiro snapshot somente depois de uma pontuação válida.
+    // Depois disso, apenas a função agendada no servidor atualiza o ranking diariamente às 07h30
+    // (horário de Brasília). O navegador não tenta renovar snapshots existentes.
     const rebuildIfDue = async (forceFirst = false) => {
       const snap = await metaRef.get();
-      const updatedAt = snap.exists && snap.data().updatedAt ? snap.data().updatedAt.toMillis() : 0;
-      if (snap.exists) return snap; // depois do primeiro ciclo, somente o agendador atualiza às 07:30
-      if (!forceFirst) return snap;
+      if (snap.exists || !forceFirst) return snap;
 
       const [easy, hard, boss] = await Promise.all([
         readTop("easyBest", "desc"), readTop("hardBest", "desc"), readTop("bossBestMs", "asc")
@@ -66,11 +64,10 @@ const DB = (() => {
       try {
         await metaRef.set(data);
       } catch (e) {
-        // Outro jogador pode ter criado/atualizado o documento entre a leitura e a escrita.
+        // Se outra pontuação criou o snapshot ao mesmo tempo, reutilizamos esse documento.
+        // Não tentamos atualizá-lo pelo navegador: a atualização diária é responsabilidade do servidor.
         const latest = await metaRef.get();
         if (!latest.exists) throw e;
-        const latestAt = latest.data().updatedAt ? latest.data().updatedAt.toMillis() : 0;
-        if (Date.now() - latestAt >= DAY) throw e;
       }
       return metaRef.get();
     };
@@ -110,13 +107,13 @@ const DB = (() => {
           const better = field === "bossBestMs" ? (!old || value < old) : value > old;
           if (better) t.update(ref, { [field]: value });
         });
-        // A primeira pontuação válida inicia o ciclo; depois, o ranking só é refeito
-        // quando completadas 24h. O ciclo seguinte começa imediatamente na atualização.
+        // A primeira pontuação válida cria o snapshot inicial. As atualizações seguintes
+        // são feitas pelo agendador do servidor todos os dias às 07h30 (horário de Brasília).
         await rebuildIfDue(true);
       },
 
       async getLeaderboards() {
-        // O navegador apenas lê a fotografia. O agendador do servidor atualiza diariamente às 07:30.
+        // O navegador apenas lê a fotografia; o servidor a atualiza diariamente às 07h30 de Brasília.
         const snap = await metaRef.get();
         if (!snap.exists) return { easy: [], hard: [], boss: [], updatedAt: null };
         const d = snap.data();
