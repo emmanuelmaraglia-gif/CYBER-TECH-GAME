@@ -116,15 +116,13 @@ const DB = (() => {
       },
 
       async getLeaderboards() {
-        // Sempre consulta os jogadores diretamente ao abrir o Hall da Fama.
-        // Não depende da fotografia "meta/leaderboard", que pode ficar vazia
-        // ou desatualizada por até 24 horas.
-        const [easy, hard, boss] = await Promise.all([
-          readTop("easyBest", "desc"),
-          readTop("hardBest", "desc"),
-          readTop("bossBestMs", "asc")
-        ]);
-        return { easy, hard, boss, updatedAt: Date.now() };
+        // Usa a fotografia do ciclo. Se as 24h venceram, a primeira visita
+        // recalcula o ranking; abrir o Hall não inicia um ciclo sem pontuação.
+        await rebuildIfDue(false);
+        const snap = await metaRef.get();
+        if (!snap.exists) return { easy: [], hard: [], boss: [], updatedAt: null };
+        const d = snap.data();
+        return { easy: d.easy || [], hard: d.hard || [], boss: d.boss || [], updatedAt: d.updatedAt ? d.updatedAt.toMillis() : null };
       }
     };
   }
@@ -156,15 +154,23 @@ const DB = (() => {
     },
 
     async submit(me, field, value) {
+      if (!(value > 0)) return;
       const p = players(), k = keyOf(me.name);
       p[k] = p[k] || { name: me.name, easyBest: 0, hardBest: 0 };
       const better = field === "bossBestMs" ? (!p[k][field] || value < p[k][field]) : value > (p[k][field] || 0);
       if (better) { p[k][field] = value; write(PK, p); }
+      let snap = read(SK, null);
+      if (!snap || Date.now() - snap.updatedAt >= DAY) {
+        snap = { updatedAt: Date.now(), easy: top(p, "easyBest", true), hard: top(p, "hardBest", true), boss: top(p, "bossBestMs", false) };
+        write(SK, snap);
+      }
     },
 
     async getLeaderboards() {
       let snap = read(SK, null);
-      if (!snap || Date.now() - snap.updatedAt >= DAY) {
+      // Não cria o primeiro ciclo apenas por abrir o Hall; exige pontuação válida.
+      if (!snap) return { updatedAt: null, easy: [], hard: [], boss: [] };
+      if (Date.now() - snap.updatedAt >= DAY) {
         const p = players();
         snap = { updatedAt: Date.now(), easy: top(p, "easyBest", true), hard: top(p, "hardBest", true), boss: top(p, "bossBestMs", false) };
         write(SK, snap);
