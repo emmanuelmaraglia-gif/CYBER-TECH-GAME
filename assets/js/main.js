@@ -113,11 +113,30 @@ const DB = (() => {
       },
 
       async getLeaderboards() {
-        // O navegador apenas lê a fotografia; o servidor a atualiza diariamente às 07h30 de Brasília.
+        // O ranking consolidado é a fonte principal. Se ainda não existe ou está
+        // vazio, recuperamos visualmente as pontuações já salvas em /players,
+        // sem tentar alterar o snapshot fora do ciclo permitido pelas regras.
         const snap = await metaRef.get();
-        if (!snap.exists) return { easy: [], hard: [], boss: [], updatedAt: null };
-        const d = snap.data();
-        return { easy: d.easy || [], hard: d.hard || [], boss: d.boss || [], updatedAt: d.updatedAt ? d.updatedAt.toMillis() : null };
+        const d = snap.exists ? snap.data() : null;
+        const result = {
+          easy: d && Array.isArray(d.easy) ? d.easy : [],
+          hard: d && Array.isArray(d.hard) ? d.hard : [],
+          boss: d && Array.isArray(d.boss) ? d.boss : [],
+          updatedAt: d && d.updatedAt && typeof d.updatedAt.toMillis === "function" ? d.updatedAt.toMillis() : null
+        };
+        const snapshotEmpty = !result.easy.length && !result.hard.length && !result.boss.length;
+        if (!snapshotEmpty) return result;
+
+        const [easy, hard, boss] = await Promise.all([
+          readTop("easyBest", "desc"),
+          readTop("hardBest", "desc"),
+          readTop("bossBestMs", "asc")
+        ]);
+        result.easy = easy;
+        result.hard = hard;
+        result.boss = boss;
+        result.recovered = true;
+        return result;
       }
     };
   }
@@ -557,7 +576,7 @@ function submitIf(field, value) {
   const better = field === "bossBestMs" ? (!me[field] || value < me[field]) : value > (me[field] || 0);
   if (!better) return;
   me[field] = value; saveMe();
-  DB.submit(me, field, value).catch(() => {});       // sem internet: o recorde fica salvo aqui e é reenviado depois
+  DB.submit(me, field, value).catch(err => console.error("Falha ao sincronizar pontuação/Hall da Fama:", err)); // a pontuação local permanece e o erro fica visível no console
 }
 function submitRecord() {
   if (mode === "easy") submitIf("easyBest", score);
@@ -565,7 +584,7 @@ function submitRecord() {
 }
 function syncMe() {                                  // reenvia recordes guardados (ex.: se estava sem internet)
   if (!me) return;
-  DB.ready.then(() => ["easyBest", "hardBest", "bossBestMs"].forEach(f => { if (me[f]) DB.submit(me, f, me[f]).catch(() => {}); })).catch(() => {});
+  DB.ready.then(() => ["easyBest", "hardBest", "bossBestMs"].forEach(f => { if (me[f]) DB.submit(me, f, me[f]).catch(err => console.error("Falha ao reenviar recorde ao Firebase:", err)); })).catch(() => {});
 }
 
 // ----- LOGIN -----
