@@ -56,8 +56,8 @@ const DB = (() => {
     const rebuildIfDue = async (forceFirst = false) => {
       const snap = await metaRef.get();
       const updatedAt = snap.exists && snap.data().updatedAt ? snap.data().updatedAt.toMillis() : 0;
-      if (snap.exists && Date.now() - updatedAt < DAY) return snap;
-      if (!snap.exists && !forceFirst) return snap;
+      if (snap.exists) return snap; // depois do primeiro ciclo, somente o agendador atualiza às 07:30
+      if (!forceFirst) return snap;
 
       const [easy, hard, boss] = await Promise.all([
         readTop("easyBest", "desc"), readTop("hardBest", "desc"), readTop("bossBestMs", "asc")
@@ -116,9 +116,7 @@ const DB = (() => {
       },
 
       async getLeaderboards() {
-        // Usa a fotografia do ciclo. Se as 24h venceram, a primeira visita
-        // recalcula o ranking; abrir o Hall não inicia um ciclo sem pontuação.
-        await rebuildIfDue(false);
+        // O navegador apenas lê a fotografia. O agendador do servidor atualiza diariamente às 07:30.
         const snap = await metaRef.get();
         if (!snap.exists) return { easy: [], hard: [], boss: [], updatedAt: null };
         const d = snap.data();
@@ -160,7 +158,7 @@ const DB = (() => {
       const better = field === "bossBestMs" ? (!p[k][field] || value < p[k][field]) : value > (p[k][field] || 0);
       if (better) { p[k][field] = value; write(PK, p); }
       let snap = read(SK, null);
-      if (!snap || Date.now() - snap.updatedAt >= DAY) {
+      if (!snap) {
         snap = { updatedAt: Date.now(), easy: top(p, "easyBest", true), hard: top(p, "hardBest", true), boss: top(p, "bossBestMs", false) };
         write(SK, snap);
       }
@@ -170,11 +168,6 @@ const DB = (() => {
       let snap = read(SK, null);
       // Não cria o primeiro ciclo apenas por abrir o Hall; exige pontuação válida.
       if (!snap) return { updatedAt: null, easy: [], hard: [], boss: [] };
-      if (Date.now() - snap.updatedAt >= DAY) {
-        const p = players();
-        snap = { updatedAt: Date.now(), easy: top(p, "easyBest", true), hard: top(p, "hardBest", true), boss: top(p, "bossBestMs", false) };
-        write(SK, snap);
-      }
       return snap;
     }
   };
