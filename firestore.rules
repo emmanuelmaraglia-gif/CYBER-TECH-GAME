@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+
+    // Jogadores: cada documento tem como identificador o nome do jogador (sem acentos e em minúsculas).
+    match /players/{playerId} {
+      allow read: if true;
+      // Criar o nome (só uma vez: se o identificador já existir, o Firestore recusa).
+      allow create: if signedIn()
+                    && request.resource.data.keys().hasOnly(['uid','name','createdAt','easyBest','hardBest'])
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() >= 3
+                    && request.resource.data.name.size() <= 20
+                    && playerId.size() <= 20
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.easyBest == 0
+                    && request.resource.data.hardBest == 0;
+      // Atualizar recordes: só o dono do nome. Os pontos nunca diminuem
+      // e o tempo do boss (em milissegundos) nunca aumenta.
+      allow update: if signedIn()
+                    && resource.data.uid == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['easyBest','hardBest','bossBestMs'])
+                    && request.resource.data.easyBest is int
+                    && request.resource.data.hardBest is int
+                    && request.resource.data.easyBest >= resource.data.easyBest
+                    && request.resource.data.hardBest >= resource.data.hardBest
+                    && request.resource.data.easyBest <= 5000
+                    && request.resource.data.hardBest <= 5000
+                    && (!('bossBestMs' in request.resource.data)
+                        || (request.resource.data.bossBestMs is int
+                            && request.resource.data.bossBestMs >= 45000
+                            && (!('bossBestMs' in resource.data)
+                                || request.resource.data.bossBestMs <= resource.data.bossBestMs)));
+      allow delete: if false;
+    }
+
+    // Fotografia do ranking (Top 10 de cada modo), refeita no máximo a cada 24 horas pelo cliente.
+    // O Admin SDK (Cloud Functions) ignora essas regras e pode atualizar diariamente às 07h30.
+    match /meta/leaderboard {
+      allow read: if true;
+      allow create: if signedIn()
+                    && request.resource.data.keys().hasOnly(['easy','hard','boss','updatedAt'])
+                    && request.resource.data.updatedAt == request.time
+                    && request.resource.data.easy is list && request.resource.data.easy.size() <= 10
+                    && request.resource.data.hard is list && request.resource.data.hard.size() <= 10
+                    && request.resource.data.boss is list && request.resource.data.boss.size() <= 10;
+      allow update: if signedIn()
+                    && request.time >= resource.data.updatedAt + duration.value(24, 'h')
+                    && request.resource.data.keys().hasOnly(['easy','hard','boss','updatedAt'])
+                    && request.resource.data.updatedAt == request.time
+                    && request.resource.data.easy is list && request.resource.data.easy.size() <= 10
+                    && request.resource.data.hard is list && request.resource.data.hard.size() <= 10
+                    && request.resource.data.boss is list && request.resource.data.boss.size() <= 10;
+      allow delete: if false;
+    }
+  }
+}

@@ -23,6 +23,7 @@ const FIREBASE_CONFIG = {
 // O jogo só conversa com o objeto DB abaixo, então trocar de modo não muda o resto do código.
 // ============================================================
 const DB = (() => {
+  const DAY = 24 * 60 * 60 * 1000;   // o placar atualiza de 24h em 24h
   const useFirebase = typeof firebase !== "undefined" && typeof FIREBASE_CONFIG !== "undefined" &&
                       FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.apiKey !== "COLE_AQUI";
 
@@ -50,26 +51,41 @@ const DB = (() => {
       return snap.docs.map(d => ({ name: d.data().name, value: d.data()[field] }));
     };
 
-    // Cria o primeiro snapshot somente depois de uma pontuação válida.
-    // Depois disso, apenas a função agendada no servidor atualiza o ranking diariamente às 07h30
-    // (horário de Brasília). O navegador não tenta renovar snapshots existentes.
-    const rebuildIfDue = async (forceFirst = false) => {
-      const snap = await metaRef.get();
-      if (snap.exists || !forceFirst) return snap;
-
+    // Monta a fotografia consolidada (Top 10) a partir dos recordes individuais.
+    // Plano gratuito (Spark): feito no cliente; as regras do Firestore limitam create/update.
+    const buildSnapshotPayload = async () => {
       const [easy, hard, boss] = await Promise.all([
-        readTop("easyBest", "desc"), readTop("hardBest", "desc"), readTop("bossBestMs", "asc")
+        readTop("easyBest", "desc"),
+        readTop("hardBest", "desc"),
+        readTop("bossBestMs", "asc")
       ]);
-      const data = { easy, hard, boss, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+      return {
+        easy,
+        hard,
+        boss,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+    };
+
+    // Cria o 1º ciclo se ainda não existir; se já existir e passaram 24h, renova.
+    // Se as regras recusarem (ainda dentro das 24h), mantém o snapshot anterior.
+    const maybeRefreshLeaderboard = async () => {
       try {
-        await metaRef.set(data);
-      } catch (e) {
-        // Se outra pontuação criou o snapshot ao mesmo tempo, reutilizamos esse documento.
-        // Não tentamos atualizá-lo pelo navegador: a atualização diária é responsabilidade do servidor.
-        const latest = await metaRef.get();
-        if (!latest.exists) throw e;
+        const current = await metaRef.get();
+        const payload = await buildSnapshotPayload();
+        if (!current.exists) {
+          await metaRef.set(payload);
+          return;
+        }
+        // Tentativa de update — as regras só permitem se updatedAt + 24h <= agora.
+        await metaRef.update(payload);
+      } catch (err) {
+        // permission-denied = ciclo de 24h ainda ativo (esperado) ou regras/auth.
+        // Não interrompe a gravação do recorde individual do jogador.
+        if (err && err.code !== "permission-denied") {
+          console.warn("Hall da Fama: não foi possível atualizar o snapshot:", err);
+        }
       }
-      return metaRef.get();
     };
 
     return {
@@ -107,36 +123,24 @@ const DB = (() => {
           const better = field === "bossBestMs" ? (!old || value < old) : value > old;
           if (better) t.update(ref, { [field]: value });
         });
-        // A primeira pontuação válida cria o snapshot inicial. As atualizações seguintes
-        // são feitas pelo agendador do servidor todos os dias às 07h30 (horário de Brasília).
-        await rebuildIfDue(true);
+        // Após gravar o recorde individual, tenta criar/renovar o ranking consolidado (gratuito, no cliente).
+        await maybeRefreshLeaderboard();
       },
 
       async getLeaderboards() {
-        // O ranking consolidado é a fonte principal. Se ainda não existe ou está
-        // vazio, recuperamos visualmente as pontuações já salvas em /players,
-        // sem tentar alterar o snapshot fora do ciclo permitido pelas regras.
+        // Sempre lê a fotografia consolidada (não o ranking “ao vivo” a cada abertura).
         const snap = await metaRef.get();
-        const d = snap.exists ? snap.data() : null;
-        const result = {
-          easy: d && Array.isArray(d.easy) ? d.easy : [],
-          hard: d && Array.isArray(d.hard) ? d.hard : [],
-          boss: d && Array.isArray(d.boss) ? d.boss : [],
-          updatedAt: d && d.updatedAt && typeof d.updatedAt.toMillis === "function" ? d.updatedAt.toMillis() : null
+        if (!snap.exists) {
+          // Ainda não houve 1ª pontuação válida que criou o ciclo.
+          return { easy: [], hard: [], boss: [], updatedAt: null };
+        }
+        const d = snap.data();
+        return {
+          easy: d.easy || [],
+          hard: d.hard || [],
+          boss: d.boss || [],
+          updatedAt: d.updatedAt ? d.updatedAt.toMillis() : null
         };
-        const snapshotEmpty = !result.easy.length && !result.hard.length && !result.boss.length;
-        if (!snapshotEmpty) return result;
-
-        const [easy, hard, boss] = await Promise.all([
-          readTop("easyBest", "desc"),
-          readTop("hardBest", "desc"),
-          readTop("bossBestMs", "asc")
-        ]);
-        result.easy = easy;
-        result.hard = hard;
-        result.boss = boss;
-        result.recovered = true;
-        return result;
       }
     };
   }
@@ -576,7 +580,7 @@ function submitIf(field, value) {
   const better = field === "bossBestMs" ? (!me[field] || value < me[field]) : value > (me[field] || 0);
   if (!better) return;
   me[field] = value; saveMe();
-  DB.submit(me, field, value).catch(err => console.error("Falha ao sincronizar pontuação/Hall da Fama:", err)); // a pontuação local permanece e o erro fica visível no console
+  DB.submit(me, field, value).catch(err => console.error("Falha ao salvar/sincronizar recorde no Firebase:", err));
 }
 function submitRecord() {
   if (mode === "easy") submitIf("easyBest", score);
@@ -584,7 +588,7 @@ function submitRecord() {
 }
 function syncMe() {                                  // reenvia recordes guardados (ex.: se estava sem internet)
   if (!me) return;
-  DB.ready.then(() => ["easyBest", "hardBest", "bossBestMs"].forEach(f => { if (me[f]) DB.submit(me, f, me[f]).catch(err => console.error("Falha ao reenviar recorde ao Firebase:", err)); })).catch(() => {});
+  DB.ready.then(() => ["easyBest", "hardBest", "bossBestMs"].forEach(f => { if (me[f]) DB.submit(me, f, me[f]).catch(err => console.error("Falha ao reenviar recorde " + f + ":", err)); })).catch(err => console.error("Falha ao preparar sincronização de recordes:", err));
 }
 
 // ----- LOGIN -----
@@ -994,7 +998,8 @@ function drawHall() {
 
   ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,255,255,0.75)"; ctx.font = "12px Arial";
   ctx.fillText(DB.mode === "local" ? "MODO DE TESTE · dados de exemplo salvos só neste aparelho"
-                                   : "Placar ao vivo · atualizado em " + fmtDate(hall.updatedAt), W() / 2, L.footY);
+                                   : (hall.updatedAt ? "Ranking consolidado · atualizado em " + fmtDate(hall.updatedAt)
+                                                     : "Primeiro ranking em preparação · pontuações salvas no Firebase"), W() / 2, L.footY);
   if (me) ctx.fillText("Seus recordes: Fácil " + (me.easyBest || 0) + " · Difícil " + (me.hardBest || 0) +
                        " · Boss " + (me.bossBestMs ? fmtRun(me.bossBestMs) : "--"), W() / 2, L.footY + 16);
   ctx.textAlign = "left";
