@@ -123,24 +123,18 @@ const DB = (() => {
           const better = field === "bossBestMs" ? (!old || value < old) : value > old;
           if (better) t.update(ref, { [field]: value });
         });
-        // Após gravar o recorde individual, tenta criar/renovar o ranking consolidado (gratuito, no cliente).
-        await maybeRefreshLeaderboard();
+        // O Hall consulta diretamente /players; não depende de uma fotografia de 24 horas.
       },
 
       async getLeaderboards() {
-        // Sempre lê a fotografia consolidada (não o ranking “ao vivo” a cada abertura).
-        const snap = await metaRef.get();
-        if (!snap.exists) {
-          // Ainda não houve 1ª pontuação válida que criou o ciclo.
-          return { easy: [], hard: [], boss: [], updatedAt: null };
-        }
-        const d = snap.data();
-        return {
-          easy: d.easy || [],
-          hard: d.hard || [],
-          boss: d.boss || [],
-          updatedAt: d.updatedAt ? d.updatedAt.toMillis() : null
-        };
+        // Consulta os recordes atuais em /players a cada abertura do Hall.
+        // Não depende de meta/leaderboard nem de ciclos de 24 horas.
+        const [easy, hard, boss] = await Promise.all([
+          readTop("easyBest", "desc"),
+          readTop("hardBest", "desc"),
+          readTop("bossBestMs", "asc")
+        ]);
+        return { easy, hard, boss, updatedAt: Date.now() };
       }
     };
   }
